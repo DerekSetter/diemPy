@@ -1,0 +1,25 @@
+# Table of contents
+# Learn more at https://jupyterbook.org/customize/toc.html
+
+format: jb-book
+root: intro
+parts:
+- caption: Getting started
+  label: part-getting-started
+  chapters:
+  - file: installation
+  - file: quickstart
+- caption: Tutorial
+  label: part-tutorial
+  chapters:
+  - file: workflow_dev_test
+- caption: Interface
+  label: part-interface
+  chapters:
+  - file: api   # I would like this to be auto-generated as in sphinx/apidoc  
+- caption: other files
+  label: part-other-files
+  chapters:
+  - file: markdown
+  - file: notebooks
+  - file: markdown-notebooks
