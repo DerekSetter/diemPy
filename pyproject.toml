@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diem"
+version = "0.0.1"
+authors = [
+  { name="Derek Setter", email="derek.setter@gmail.com" },
+]
+description = "Polarize genomes using diem"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "GPL-3.0"
+license-files = ["LICEN[CS]E*"]
