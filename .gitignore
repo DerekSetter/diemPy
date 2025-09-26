@@ -2,6 +2,12 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+*.pyo
+
+# Numba cache files
+.numba_cache/
+__numba_cache__/
 
 # C extensions (if you add any compiled extensions)
 *.so

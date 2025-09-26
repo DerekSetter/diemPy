@@ -463,7 +463,7 @@ class DiemType:
         
         return a
     
-    def smooth(self,scale: float ,reSort=False,reSmooth=False):
+    def smooth(self,scale: float ,reSort=False,reSmooth=False,parallel=True):
         """
         Smooth and return a copy of the state matrices using a Laplace kernel . defaults to NOT resorting by hybrid index. This allows for direct comparison to pre-smoothed data.  May later resort using self.sort() on resulting data.
 
@@ -471,6 +471,7 @@ class DiemType:
             scale (float): Scale parameter for the Laplace kernel smoothing.
             reSort (bool, optional): If True, resorts individuals by hybrid index after smoothing. Default is False.
             reSmooth (bool, optional): If True, allows re-smoothing even if smoothing has already been done. Default is False.
+            parallel (bool, optional): If True, uses parallel processing for smoothing. Default is True.
 
         Returns:
             DiemType: A new DiemType instance with smoothed state matrices.
@@ -489,8 +490,17 @@ class DiemType:
         a = copy.deepcopy(self)
         a.smoothScale = scale
 
+        if parallel == True:
+            print("using parallel smoothing")
+        else:
+            print("using serial smoothing")
+            
         for idx in range(len(a.DMBC)):
-            thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],scale)
+            if parallel == False:
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],scale)
+            else:
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes_parallel(a.MapBC[idx],a.DMBC[idx],scale)
+
             a.DMBC[idx] = thisStateMatSmoothed
         if reSort == False:
             print("smoothing done, but not resorting by HI. You may call the sort() method on the resulting data if you wish to resort")
