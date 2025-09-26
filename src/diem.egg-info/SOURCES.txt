@@ -3,12 +3,15 @@ README.md
 pyproject.toml
 src/diem/__init__.py
 src/diem/contigs.py
-src/diem/diem_utils.py
 src/diem/diemtype.py
 src/diem/polarize.py
 src/diem/smooth.py
 src/diem/tests.py
+src/diem/utils.py
+src/diem/vcf2diemOld.py
 src/diem.egg-info/PKG-INFO
 src/diem.egg-info/SOURCES.txt
 src/diem.egg-info/dependency_links.txt
+src/diem.egg-info/entry_points.txt
+src/diem.egg-info/requires.txt
 src/diem.egg-info/top_level.txt
