@@ -1,51 +1,13 @@
 import numba
 import numpy as np
-import timeit
-import time
+#import timeit
+#import time
 import math
 from matplotlib import pyplot as plt
-import pandas
+#import pandas as pd
+from numba import prange
+import multiprocessing as mp
 
-
-
-def import_polarized_data(inputHapStringFiles_,inputMarkerFiles_,chrLengths_):
-    
-    stateMatrixByChr = []
-    positionsByChr = []
-    polarityByChr = []
-    DIByChr = []
-    mapPosByChr = []
-    
-    for idx in range(len(inputHapStringFiles_)):
-    
-        #get state matrices
-        df = pandas.read_csv(inputHapStringFiles_[idx])
-    
-        stateMatrix = np.zeros((len(df['0']),len(df['0'][1])),dtype = np.int8)-1
-        for indIdx,ind in enumerate(df['0']):
-            for charIdx,char in enumerate(ind):
-                if char == '_':
-                    char = 0
-                else:
-                    char = int(char)+1
-                stateMatrix[indIdx][charIdx] = char
-    
-        stateMatrixByChr.append(stateMatrix)
-    
-        #get the rest of the info
-    
-        df = pandas.read_csv(inputMarkerFiles_[idx],sep='\t')
-        pos = np.array(df['positions'])
-        pol = np.array(df['polarity'])
-        DI = np.array(df['DI'])
-        mapPos = pos/chrLengths_[idx]
-    
-        positionsByChr.append(pos)
-        polarityByChr.append(pol)
-        DIByChr.append(DI)
-        mapPosByChr.append(mapPos)
-
-    return stateMatrixByChr, positionsByChr, polarityByChr, DIByChr, mapPosByChr
 
 
 # this function returns the reach, i.e. distance away that we wil look at given the scale
@@ -135,7 +97,7 @@ def get_interval_indices(posArr,scale):
     right = 0
     
     nSites = len(posArr)
-    res = np.zeros((nSites,2),dtype=np.int8)-1
+    res = np.zeros((nSites,2),dtype=np.int64)
     
 
     for focusIdx,focusPos in enumerate(posArr):
@@ -143,10 +105,9 @@ def get_interval_indices(posArr,scale):
         while left<=focusIdx and (focusPos - posArr[left])>maxDist: left +=1
         while right< len(posArr)-1 and (posArr[right+1] - focusPos)<maxDist: right += 1
 
-        res[focusIdx] = np.array([left,right])
+        res[focusIdx] = np.array([left,right],dtype=np.int64)
     return res
 
-    
 
 
 @numba.njit
@@ -202,6 +163,48 @@ def laplace_smooth_multiple_haplotypes(posArr,valArr,scale): #this version does 
             res[haplotypeIndex][focusIdx] = v
             
     return res        
+
+
+@numba.njit(parallel=True)
+def laplace_smooth_multiple_haplotypes_parallel(posArr, valArr, scale):
+    """
+    Parallel version of laplace_smooth_multiple_haplotypes using numba prange.
+    Parallelizes across genomic sites for better performance.
+    """
+    maxDist = TruncatedLaplaceReach(scale/2)
+    
+    nHaplotypes = len(valArr)
+    nSites = len(posArr)
+    
+    if nHaplotypes >= nSites:
+        print("there are more haplotypes than sites in this dataset. check that you have passed the position array and value array in the correct order")
+        print("continuing evaluation as if everything were normal")
+    
+    res = np.zeros((nHaplotypes, nSites), dtype=np.int8) - 1
+    
+    # Pre-compute intervals for all sites (this helps with parallelization)
+    # IMPORTANT: Use scale/2 to match the sequential version
+    intervals = get_interval_indices(posArr, scale/2)
+    
+    # Parallelize across sites using prange
+    for focusIdx in prange(nSites):
+        left = intervals[focusIdx][0]
+        right = intervals[focusIdx][1]
+        
+        # Get weights for this site's window
+        weights = get_laplace_weights(posArr[left:right+1], focusIdx - left, scale)
+        
+        # Process all haplotypes for this site
+        for haplotypeIndex in range(nHaplotypes):
+            v = get_laplace_smoothed_value(
+                posArr[left:right+1], 
+                valArr[haplotypeIndex][left:right+1], 
+                focusIdx - left, 
+                weights
+            )
+            res[haplotypeIndex][focusIdx] = v
+    
+    return res
 
 
 
