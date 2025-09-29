@@ -550,7 +550,21 @@ class DiemType:
                 chrIntervals =thisContig.get_my_intervals_of_state(state)
                 intervals.extend(chrIntervals)
         return intervals
-    
+
+    def intervals_to_bed(self,outputDir):
+        """
+        Export intervals of each state to BED files for each chromosome and state.
+
+        Args:
+            outputDir (str): Directory to save the BED files.
+        """
+        if self.contigMatrix is None:
+            print("contig matrix has not been created. Please run the create_contig_matrix() method first.")
+            return None
+        ct.export_contigs_to_ind_bed_files(self,outputDir)
+        print("BED files created in directory: ",outputDir)
+        return None
+
 
 # save diemtype function needs to be updated.  The dictionary of variables is saved exactly as below
 # however, now the contigMatrix needs to be 'packed' as well in order to be saved correctly.
