@@ -229,7 +229,7 @@ def MArray_to_stateMatrix(M):
     nMarkers = M.shape[0]
     nInds = M.shape[1]
     x= np.nonzero(M)[2]
-    sm = x.reshape(nMarkers,nInds).transpose()
+    sm = x.reshape(nMarkers,nInds).transpose().astype(M.dtype)
     return sm
 
 # my original version
@@ -594,7 +594,6 @@ def run_em_linear(
      
     MBC = [x.copy()[:,individualsIncluded,:] for x in initMBC ]
     ploidyBC = [x[individualsIncluded] for x in ploidyBC]
-
     print(' num individuals in MBC is ', MBC[0].shape[1])   
 
     polBC = [x.copy() for x in initPolBC]

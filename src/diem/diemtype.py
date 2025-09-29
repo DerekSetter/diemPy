@@ -26,7 +26,7 @@ def flip_polarity(diemMatrix,newPolarity,oldPolarity=None):
         np.ndarray: The Diem Matrix with updated polarity.
     '''
     if oldPolarity is None:
-        oldPolarity = np.zeros(len(newPolarity), dtype=int)
+        oldPolarity = np.zeros(len(newPolarity), dtype=np.int8)
     
     cols_to_flip = np.where(newPolarity != oldPolarity)[0]
     if len(cols_to_flip) == 0:
@@ -102,7 +102,7 @@ def new_import_raw_test_data():
     chrNames = dfInfo["chromosome_names"].to_numpy()
     chrLengths = dfInfo["chromosome_lengths"].to_numpy()
 
-    chrPloidies = np.array(dfInfo.iloc[0:,2:], dtype=int)
+    chrPloidies = np.array(dfInfo.iloc[0:,2:], dtype=np.int8)
 
     sampleNames = dfInfo.columns[2:].to_numpy()
 
@@ -119,7 +119,7 @@ def new_import_raw_test_data():
         #print(a[0:5])
         #a = np.array(a,dtype=int)
         #print(a[0:5])
-        a = np.array(a,dtype=int).transpose()
+        a = np.array(a,dtype=np.int8).transpose()
         #np.array([list(s[0][0]) for s in dfChr.iloc[0:,2:].to_numpy()],dtype=int)
         #print(a)
         DMBC.append(a)
@@ -415,6 +415,7 @@ class DiemType:
         a.DIByChr = DIBC_out
         a.SupportByChr = SupportBC_out
         a.DMBC = [pol.MArray_to_stateMatrix(x) for x in MBC_out]
+        
         a.HIs = a.computeHIs()
         if sort_by_HI == True:
             print("re-sorting individuals by HI")
