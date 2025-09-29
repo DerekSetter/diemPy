@@ -119,7 +119,7 @@ def new_import_raw_test_data():
         #print(a[0:5])
         #a = np.array(a,dtype=int)
         #print(a[0:5])
-        a = np.array(a,dtype=np.int8).transpose()
+        a = np.array(a,dtype=np.int8).transpose().copy()
         #np.array([list(s[0][0]) for s in dfChr.iloc[0:,2:].to_numpy()],dtype=int)
         #print(a)
         DMBC.append(a)

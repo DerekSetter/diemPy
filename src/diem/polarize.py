@@ -229,7 +229,7 @@ def MArray_to_stateMatrix(M):
     nMarkers = M.shape[0]
     nInds = M.shape[1]
     x= np.nonzero(M)[2]
-    sm = x.reshape(nMarkers,nInds).transpose().astype(M.dtype)
+    sm = x.reshape(nMarkers,nInds).transpose().astype(M.dtype).copy()
     return sm
 
 # my original version
