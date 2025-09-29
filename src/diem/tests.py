@@ -162,7 +162,7 @@ def compare_DiemTypes(dTest,dSolution):
             AttributesFailedList.append(key)
         else:
             if not compare_contig_matrices(dSolution.__dict__[key],dTest.__dict__[key]):
-                print("Attribute ",key," differs in (neither is None) ")
+                print("Attribute ",key," differs (neither is None) ")
                 testPassed = False
                 AttributesFailedList.append(key)
             
