@@ -46,6 +46,7 @@ Thumbs.db
 # Project-specific exclusions
 example_data/
 tests/
+notebooks/
 
 # Development notebooks
 SmoothingParallelDev.ipynb
