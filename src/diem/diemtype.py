@@ -26,7 +26,7 @@ def flip_polarity(diemMatrix,newPolarity,oldPolarity=None):
         np.ndarray: The Diem Matrix with updated polarity.
     '''
     if oldPolarity is None:
-        oldPolarity = np.zeros(len(newPolarity), dtype=int)
+        oldPolarity = np.zeros(len(newPolarity), dtype=np.int8)
     
     cols_to_flip = np.where(newPolarity != oldPolarity)[0]
     if len(cols_to_flip) == 0:
@@ -102,7 +102,7 @@ def new_import_raw_test_data():
     chrNames = dfInfo["chromosome_names"].to_numpy()
     chrLengths = dfInfo["chromosome_lengths"].to_numpy()
 
-    chrPloidies = np.array(dfInfo.iloc[0:,2:], dtype=int)
+    chrPloidies = np.array(dfInfo.iloc[0:,2:], dtype=np.int8)
 
     sampleNames = dfInfo.columns[2:].to_numpy()
 
@@ -119,7 +119,7 @@ def new_import_raw_test_data():
         #print(a[0:5])
         #a = np.array(a,dtype=int)
         #print(a[0:5])
-        a = np.array(a,dtype=int).transpose()
+        a = np.array(a,dtype=np.int8).transpose().copy()
         #np.array([list(s[0][0]) for s in dfChr.iloc[0:,2:].to_numpy()],dtype=int)
         #print(a)
         DMBC.append(a)
@@ -415,6 +415,7 @@ class DiemType:
         a.DIByChr = DIBC_out
         a.SupportByChr = SupportBC_out
         a.DMBC = [pol.MArray_to_stateMatrix(x) for x in MBC_out]
+        
         a.HIs = a.computeHIs()
         if sort_by_HI == True:
             print("re-sorting individuals by HI")
@@ -463,7 +464,7 @@ class DiemType:
         
         return a
     
-    def smooth(self,scale: float ,reSort=False,reSmooth=False):
+    def smooth(self,scale: float ,reSort=False,reSmooth=False,parallel=True):
         """
         Smooth and return a copy of the state matrices using a Laplace kernel . defaults to NOT resorting by hybrid index. This allows for direct comparison to pre-smoothed data.  May later resort using self.sort() on resulting data.
 
@@ -471,6 +472,7 @@ class DiemType:
             scale (float): Scale parameter for the Laplace kernel smoothing.
             reSort (bool, optional): If True, resorts individuals by hybrid index after smoothing. Default is False.
             reSmooth (bool, optional): If True, allows re-smoothing even if smoothing has already been done. Default is False.
+            parallel (bool, optional): If True, uses parallel processing for smoothing. Default is True.
 
         Returns:
             DiemType: A new DiemType instance with smoothed state matrices.
@@ -489,8 +491,17 @@ class DiemType:
         a = copy.deepcopy(self)
         a.smoothScale = scale
 
+        if parallel == True:
+            print("using parallel smoothing")
+        else:
+            print("using serial smoothing")
+            
         for idx in range(len(a.DMBC)):
-            thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],scale)
+            if parallel == False:
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],scale)
+            else:
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes_parallel(a.MapBC[idx],a.DMBC[idx],scale)
+
             a.DMBC[idx] = thisStateMatSmoothed
         if reSort == False:
             print("smoothing done, but not resorting by HI. You may call the sort() method on the resulting data if you wish to resort")
@@ -540,7 +551,21 @@ class DiemType:
                 chrIntervals =thisContig.get_my_intervals_of_state(state)
                 intervals.extend(chrIntervals)
         return intervals
-    
+
+    def intervals_to_bed(self,outputDir):
+        """
+        Export intervals of each state to BED files for each chromosome and state.
+
+        Args:
+            outputDir (str): Directory to save the BED files.
+        """
+        if self.contigMatrix is None:
+            print("contig matrix has not been created. Please run the create_contig_matrix() method first.")
+            return None
+        ct.export_contigs_to_ind_bed_files(self,outputDir)
+        print("BED files created in directory: ",outputDir)
+        return None
+
 
 # save diemtype function needs to be updated.  The dictionary of variables is saved exactly as below
 # however, now the contigMatrix needs to be 'packed' as well in order to be saved correctly.

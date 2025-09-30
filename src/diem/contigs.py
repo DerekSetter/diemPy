@@ -2,6 +2,8 @@
 #for local imports, check which functions are being used and whether there are better functions defined elsewhere
 
 import numpy as np
+import os
+import pandas as pd
 # np.set_printoptions(legacy = '1.25')
 
 #import pandas as pd
@@ -300,3 +302,34 @@ def build_contig_matrix(diemType,includeSingle = True):
             cArr[cIdx, indIdx] = contig
 
     return cArr
+
+
+def export_contigs_to_ind_bed_files(diemType, outputDir):
+    '''
+    Exports contig intervals to BED files for each individual.
+
+    Args:
+        diemType (DiemType): DiemType object containing contig data.
+        outputDir (str): Directory where BED files will be saved.
+    '''
+
+    nChrs = len(diemType.chrNames)
+    nInds = len(diemType.indNames)
+
+    # Ensure output directory exists
+    os.makedirs(outputDir, exist_ok=True)
+
+    for indIdx in range(nInds):
+
+        indName = diemType.indNames[indIdx]
+        bedFilePath = os.path.join(outputDir, f"{indName}_contigs.bed")
+        data = []
+
+        with open(bedFilePath, 'w') as bedFile:
+            for cIdx in range(nChrs):
+                thisContig = diemType.contigMatrix[cIdx][indIdx]
+            
+                for ivl in thisContig.intervals:
+                    data.append([ivl.chrName, ivl.l-1, ivl.r-1, ivl.state])  # BED format is 0-based start, 1-based end
+        dfInd = pd.DataFrame(data, columns=["chrom", "start", "end", "state"])
+        dfInd.to_csv(bedFilePath, sep="\t", header=True, index=False)
