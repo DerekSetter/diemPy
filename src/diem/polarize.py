@@ -577,7 +577,6 @@ def run_em_linear(
             finalPolBC (List[np.ndarray]): Final polarity array after polarization.
             finalDIBC (List[np.ndarray]): Final diagnostic index array after polarization.  
     '''
-
     print("starting")
 
     individualsIncluded = np.arange(len(initMBC[0][0]))
@@ -622,15 +621,15 @@ def run_em_linear(
             break
 
         
-        old_polBC = [x.copy() for x in polBC]
-        pol_bytes = np.hstack(old_polBC).tobytes()
+        # Create hash without unnecessary copies
+        pol_bytes = np.hstack(polBC).tobytes()
         pol_hash = hashlib.sha256(pol_bytes).hexdigest()
         history[pol_hash] = i
         
         
 
-        np0 = sum([sum(x==0) for x in old_polBC])
-        np1 = sum([sum(x==1) for x in old_polBC])
+        np0 = sum([sum(x==0) for x in polBC])
+        np1 = sum([sum(x==1) for x in polBC])
         print('iteration ',i,'  num 0 polarity = ', np0, '  num 1 polarity = ', np1)
 
         # getting I4 and I4z over all chromosomes
@@ -653,12 +652,10 @@ def run_em_linear(
   
 
     
-        #getting A4 and A4z over all chromosomes
-        A4BC = []
-        for I, ploidy  in zip(*[I4BC,ploidyBC]):
-            A4BC.append(np.dot(np.diag(ploidy),I))
-        A4BC = np.array(A4BC)
-        A4All = np.sum(A4BC,axis=0)
+        #getting A4 and A4z over all chromosomes - memory efficient version
+        A4All = np.zeros_like(I4All)
+        for I, ploidy in zip(I4BC, ploidyBC):
+            A4All += np.dot(np.diag(ploidy), I)
         nMarkers = sum(I4All[0])
         #zPerMarker = zeta/nMarkers
         A4AllZeta = A4All+zeta
@@ -683,7 +680,8 @@ def run_em_linear(
                 p = polBC[idxChr][idxMarker]
                 m = MBC[idxChr][idxMarker]
 
-                key = (m.tobytes(),p)
+                # More memory efficient key using hash instead of full bytes
+                key = (hash(m.tobytes()),p)
                 if key in flipDict:
                     newM, newP, newDI, newS = flipDict[key]
                     MBC[idxChr][idxMarker] = newM
