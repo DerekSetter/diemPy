@@ -172,18 +172,6 @@ def count_site_differences(dmbc1,dmbc2):
 # some functions are for statematrix in diplotype class (where to put this code?)
 # some functions are for intervals in the haplolotype class (also, where to put this code?)
 
-def plot_painting(stateMatrix_):
-    # for a single chromosome in the 'stateMatrixByChromsome'
-    mycmap = colors.ListedColormap(['w','b','y','g'])
-    bounds = [-.5,.5,1.5,2.5,3.5]
-    norm = colors.BoundaryNorm(bounds,mycmap.N)
-    
-    fig, ax = plt.subplots(figsize=(16,4))
-    ax.pcolormesh(stateMatrix_, cmap = mycmap, norm=norm)
-    ax.set_yticks([])
-    ax.set_yticklabels([])
-    plt.show()
-
 def plot_all_spans(d_):
     # d_ is an instance of the Diplotype class
     print("spans for all individuals. blue = hom left allele, magenta = het, red = hom right")
