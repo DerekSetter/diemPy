@@ -10,7 +10,7 @@ from . import diemtype as dt
 def read_diem_bed(bed_file_path,meta_file_path):
     """
     Reads a DiEM BED file and returns a DiemType object. If the bed file has been processed by diem,
-    the bed file will contain columns for polarity, diagnostic index, and support.  This function will
+    the bed file will contain columns for polarity, diagnostic index, and support.  This function checks
     if those fields exist, those attributes will be added to the DiemType object and the diemmatrix will be flipped to match that polarity.
     
     Parameters:
@@ -113,7 +113,8 @@ def read_diem_bed(bed_file_path,meta_file_path):
 
     return d
 
-
+# note: by copying the input bed file and adding columns to it, we preserve all original information. It also means that even if diemtype object being saved has had its individuals reordered by HI, the output bed file will still have the original order.  
+# if we store all the added info in the diemtype object so that we do not need to re-read the input bed file when saving the polarized data, we also need to keep track of whether the data has been reordered or not.
 def write_polarized_bed(inputFilePath, outputFilePath, diemTypeObj):
     """
     Writes a polarized DiEM BED file based on the provided DiemType object.
@@ -123,7 +124,7 @@ def write_polarized_bed(inputFilePath, outputFilePath, diemTypeObj):
     outputFilePath (str): Path to the output polarized DiEM BED file.
     diemTypeObj (DiemType): DiemType object containing polarity information.
     """
-
+    
     if diemTypeObj.PolByChr is None:
         raise ValueError("DiemType object does not contain polarity information.")
     if inputFilePath is None or outputFilePath is None:
