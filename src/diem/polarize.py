@@ -8,18 +8,6 @@ import hashlib
 
 
 
-### move this to 'input' submodule or 'diemtype' submodule?
-def sImport(filepath):
-    if isinstance(filepath,str) != True:
-        raise ValueError("sImport: invalid filepath. expected str, found %s (%r)" % (type(filepath), filepath))
-        #print("sImport: isinstance(filepath,str) != True: ",type(filepath),". : ",filepath)
-        #return []
-    with open(filepath,'r') as f:
-        return [line.strip()[1:] for line in f] #take 1: to skip the leading 's'
-        
-
-
-
 #my original code, faster than what copilot suggested
 ### move this to 'input' submodule or 'diemtype' submodule?
 def hapStrings_to_hapIndices(x):
@@ -56,7 +44,6 @@ def hapStrings_to_hapIndices(x):
     return res
 
 
-
 # updated version, faster, from copilot
 ### again, move to 'input' submodule or to 'diemtype' submodule?
 def hapStateIndices_to_hapMatrix(hapIndices):
@@ -76,45 +63,6 @@ def hapStateIndices_to_hapMatrix(hapIndices):
     states = hapIndices[rows, cols]
     Marr[rows, cols, states] += 1
     return Marr
-
-# old version I wrote 
-# def hapStateIndices_to_hapMatrix(hapIndices):
-#     nMarkers = len(hapIndices)
-#     nInds = len(hapIndices[0])
-#     Marr = np.zeros((nMarkers,nInds,4),dtype=np.int8)
-
-#     for markerIdx, marker in enumerate(hapIndices):
-#         for indIdx,indState in enumerate(marker):
-#             Marr[markerIdx][indIdx][indState]+=1
-#     return Marr
-
-
-### not sure if this is still used and if so
-### if it should be moved to 'input' submodule or 'diemtype' submodule?
-def get_diem_input(compartmentFiles):
-    """
-    Loads and processes compartment files into M (marker) arrays.
-
-    Args:
-        compartmentFiles (List[str]): List of file paths.
-
-    Returns:
-        List[np.ndarray]: List of M arrays for each compartment.
-    """
-    MArrayBC = []
-
-    for file in compartmentFiles:
-
-        start = time.time()
-        hString = sImport(file)
-        hIndices = hapStrings_to_hapIndices(hString)
-        locMarr = hapStateIndices_to_hapMatrix(hIndices)
-        
-        MArrayBC.append(locMarr)
-        print("time in seconds to import this contig", time.time() - start)
-            
-
-    return MArrayBC 
 
 
 
