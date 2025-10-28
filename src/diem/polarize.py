@@ -509,7 +509,7 @@ def run_em_linear(
         initMBC (List[np.ndarray]): Initial Markov array of shape (nMarkers, nIndividuals, 4).
         initPolBC (List[np.ndarray]): Initial polarity array of shape (nMarkers,).
         ploidyBC (List[np.ndarray]): List of ploidy arrays for each chromosome.
-        sitesExcludedByChr (List[np.ndarray], optional): List of site positions to exclude for each chromosome. Defaults to None. If not None, it must be of length # chromosomes and if a chromosome has no exclusions,should be None.
+        sitesExcludedByChr (List[np.ndarray], optional): List of site indices to exclude for each chromosome. Defaults to None. If not None, it must be of length # chromosomes and if a chromosome has no exclusions,should be None.
         individualsExcluded (List[int], optional): List of individual indices to exclude. Defaults to None
         sitesBC (List[np.ndarray], optional): List of site positions for each chromosome. Defaults to None.
         maxItt (int, optional): Maximum number of iterations. Defaults to 500.
