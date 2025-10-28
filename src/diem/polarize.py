@@ -284,7 +284,7 @@ def run_em_parallel(
         initMBC (List[np.ndarray]): Initial Markov array of shape (nMarkers, nIndividuals, 4).
         initPolBC (List[np.ndarray]): Initial polarity array of shape (nMarkers,).
         ploidyBC (List[np.ndarray]): List of ploidy arrays for each chromosome.
-        sitesExcludedByChr (List[np.ndarray], optional): List of site positions to exclude for each chromosome. Defaults to None. If not None, it must be of length # chromosomes and if a chromosome has no exclusions,should be None.
+        sitesExcludedByChr (List[np.ndarray], optional): List of site indices to exclude for each chromosome. Defaults to None. If not None, it must be of length # chromosomes and if a chromosome has no exclusions,should be None.
         individualsExcluded (np.ndarray, optional): Array of individual indices to exclude. Defaults to None
         maxItt (int, optional): Maximum number of iterations. Defaults to 500.
         epsilon (float, optional): Convergence threshold. Defaults to 0.99.
