@@ -24,21 +24,21 @@ def read_diem_bed(bed_file_path,meta_file_path):
 
 
     df_meta = pd.read_csv(meta_file_path, sep='\t')
-    chrNames = np.array(df_meta['Chrom'].values)
+    chrNames = np.array(df_meta['#Chrom'].values)
     
     #print(chrNames)
     ### For lengths, this is wrong!  just a placeholder. need to chnage to length when this is available ###
-    chrLengths = np.array(df_meta['End_diem_input'].values)
+    chrLengths = np.array(df_meta['RefEnd0'].values) - np.array(df_meta['RefStart0'].values)
 
     #print(chrLengths)
-    sampleNames = np.array(df_meta.columns[4:])
+    sampleNames = np.array(df_meta.columns[6:])
     #print(sampleNames)
     #Assuming first three columns are #Chrom, Start_diem_input, End_diem_input, n(diem_inputs)
 
     ploidyByChr = []
     for chr in chrNames:
-        row = df_meta[df_meta['Chrom'] == chr]
-        ploidy = np.array(row.iloc[0,4:].values, dtype=int)
+        row = df_meta[df_meta['#Chrom'] == chr]
+        ploidy = np.array(row.iloc[0,6:].values, dtype=int)
         ploidyByChr.append(ploidy)
     #print(ploidyByChr)
 
@@ -116,6 +116,7 @@ def read_diem_bed(bed_file_path,meta_file_path):
     d.indExclusions = individualsMasked
     if hasPolarity:
         polarityByChr = []
+        initialPolByChr = []
         DIByChr = []
         supportByChr = []
         siteExclusionsByChr = []
@@ -129,31 +130,38 @@ def read_diem_bed(bed_file_path,meta_file_path):
             polarity = np.array(polarity,dtype=int)
             polarityByChr.append(polarity)
 
+            initialPol = thisDF['nullPolarity'].values.tolist()
+            initialPol = np.array(initialPol,dtype=int)
+            initialPolByChr.append(initialPol)
+
             DI = thisDF['DI'].values.tolist()
-            DI = np.array(DI,dtype=float)
+            DI = np.array(DI,dtype=np.float64)
             DIByChr.append(DI)
 
-            support = thisDF['support'].values.tolist()
-            support = np.array(support,dtype=int)
+            support = thisDF['Support'].values.tolist()
+            support = np.array(support,dtype=np.float64)
             supportByChr.append(support)
 
-            siteExclusions_array = thisDF['SitesMasked'].values.tolist()
+            siteExclusions_array = thisDF['masked'].values.tolist()
             siteExclusions_array = np.array(siteExclusions_array,dtype=int)
             if np.all(siteExclusions_array == 0):
                 siteExclusionsByChr.append(None)
             else:
+                siteExclusions_array = np.where(siteExclusions_array == 1)[0]
+                #siteExclusions_array = siteExclusions_array[siteExclusions_array != 0]
                 siteExclusionsByChr.append(siteExclusions_array)
                 allExclusionsAreNone = False
 
 
         if allExclusionsAreNone:
-            d.exclusionsByChr = None
+            d.siteExclusionsByChr = None
         else:
-            d.exclusionsByChr = siteExclusionsByChr
-            
+            d.siteExclusionsByChr = siteExclusionsByChr
+
         d.PolByChr = polarityByChr
         d.DIByChr = DIByChr
         d.SupportByChr = supportByChr
+        d.initialPolByChr = initialPolByChr
 
         # Now flip the DMBC according to polarity
         for idx in range(len(chrNames)):
@@ -182,14 +190,14 @@ def write_polarized_bed(inputFilePath, outputFilePath, diemTypeObj):
         raise ValueError("Input and output file paths must be different to avoid overwriting.")
 
     # produce a column for sites excluded
-    sitesMasked = [np.array([0]*len(diemTypeObj.positionByChr[i]),dtype=int) for i in range(len(diemTypeObj.chrNames))]
-    
-    if diemTypeObj.exclusionsByChr is None:
+    sitesMasked = [np.array([0]*len(diemTypeObj.posByChr[i]),dtype=int) for i in range(len(diemTypeObj.chrNames))]
+
+    if diemTypeObj.siteExclusionsByChr is None:
         pass
     else:
         for i in range(len(diemTypeObj.chrNames)):
-            if diemTypeObj.exclusionsByChr[i] is not None:            
-                sitesMasked[i][diemTypeObj.exclusionsByChr[i]] = 1
+            if diemTypeObj.siteExclusionsByChr[i] is not None:
+                sitesMasked[i][diemTypeObj.siteExclusionsByChr[i]] = 1
     
     preambleLines = []
     if diemTypeObj.indExclusions is not None:
@@ -202,7 +210,6 @@ def write_polarized_bed(inputFilePath, outputFilePath, diemTypeObj):
     with open(outputFilePath, 'w') as f_out:
         for line in preambleLines:
             f_out.write(line)
-        f_out.write("\n")
 
     #how do I append to an existing file with pandas? 
     df_bed = pd.read_csv(inputFilePath, sep='\t') 
@@ -214,5 +221,3 @@ def write_polarized_bed(inputFilePath, outputFilePath, diemTypeObj):
 
     df_bed.to_csv(outputFilePath, sep='\t', index=False, mode='a')
 
-
-def add_individual_exclusions(dto,)

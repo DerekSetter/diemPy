@@ -180,11 +180,7 @@ class DiemType:
                     self.siteExclusionsByChr[chrIdx] = []
                 
                 #append the indices of the positions in self.posByChr[chrIdx] that are >= start and < end
-                indices = np.arange(len(self.posByChr[chrIdx]))
-                filter = (self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end)
-                indices = indices[filter]
-                print(indices[0],indices[-1])
-
+                indices = np.where((self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end))[0]
                 self.siteExclusionsByChr[chrIdx] = self.siteExclusionsByChr[chrIdx] + indices.tolist()
         
 
