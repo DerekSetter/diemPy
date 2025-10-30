@@ -51,82 +51,6 @@ def flip_polarity(diemMatrix,newPolarity,oldPolarity=None):
     # arr[:, cols_to_flip][arr[:, cols_to_flip] == -1] = 3
     # return arr
 
-def get_marker_pos_from_bed(bedFile_):
-    df = pd.read_csv(bedFile_, sep = '\t',header=None)
-    pos = np.array(df[1])
-    return pos
-
-
-def import_raw_test_data():
-    '''
-    Import the example data for Iphiclides using OLD INPUT DATA FORMAT, returning a DiemType object. 
-    '''
-    chrFile = "../example_data/iphiclides_chroms.csv"
-    tempdf = pd.read_csv(chrFile,header=None)
-    chrLengths = np.array(tempdf[1]) ####
-    chrNames = np.array(tempdf[0]) ####
-
-    sampleFile = "../example_data/iphiclides_samples.txt"
-    tempdf = pd.read_csv(sampleFile,header=None,sep=' ')
-
-    sampleNames = np.array(list(tempdf[1])) ####
-
-    autosomePloidy = np.array([2 for x in sampleNames])
-    sexChrPloidy = np.array(list(tempdf[0]))
-    chrPloidies = [sexChrPloidy,autosomePloidy] ####
-
-    inBaseBed = "../example_data/annotations/"
-    chrBedFiles = [inBaseBed + x + '.included.annotations.bed' for x in chrNames]
-    positionsByChr = [get_marker_pos_from_bed(x) for x in chrBedFiles] ####
-
-    inBaseDiem = '../example_data/input/'
-    chrDiemFiles = [inBaseDiem+x+'.diem_input.txt' for x in chrNames]
-
-    MArrayBC = pol.get_diem_input(chrDiemFiles)
-    DMBC = [pol.MArray_to_stateMatrix(x) for x in MArrayBC] ####
-
-    return DiemType(DMBC,sampleNames,chrPloidies,chrNames,positionsByChr,chrLengths)
-
-# need this function to import a final version of the 'new test data format'
-# and need a function that accepts file paths to import real data
-# need to distinguish reading in 'raw' vs 'polarized' data, which can be done by whether the dataframe has a polarity column. If there is a polarty column, then the data is polarized and we need to flip the matrix by that polarity
-# if there is no polarity column, then the data is raw and we assume all markers are in polarity 0 
-def new_import_raw_test_data():
-    '''
-    Import the example data for Iphiclides using NEW INPUT DATA FORMAT, returning a DiemType object.
-    '''
-    
-    dfInfo = pd.read_csv("../example_data/iphiclides_input_info.diem.csv")
-    dfHaplotypes = pd.read_csv("../example_data/iphiclides_input_genotype.diem.csv")
-
-    chrNames = dfInfo["chromosome_names"].to_numpy()
-    chrLengths = dfInfo["chromosome_lengths"].to_numpy()
-
-    chrPloidies = np.array(dfInfo.iloc[0:,2:], dtype=np.int8)
-
-    sampleNames = dfInfo.columns[2:].to_numpy()
-
-    positionsByChr = []
-    DMBC = []
-
-    for chr in chrNames:
-        dfChr = dfHaplotypes[dfHaplotypes["chromosome"] == chr]
-        #print(dfChr)
-        positionsByChr.append(dfChr["position"].to_numpy())
-
-        a = [list(s)[1:] for s in dfChr['haplotype_string']]
-        
-        #print(a[0:5])
-        #a = np.array(a,dtype=int)
-        #print(a[0:5])
-        a = np.array(a,dtype=np.int8).transpose().copy()
-        #np.array([list(s[0][0]) for s in dfChr.iloc[0:,2:].to_numpy()],dtype=int)
-        #print(a)
-        DMBC.append(a)
-
-    return DiemType(DMBC,sampleNames,chrPloidies,chrNames,positionsByChr,chrLengths)
-
-
 # here, SM (State Matrix) is equivalent to DM (Diem Matrix) as it is now called
 def A4_from_stateMatrix(SM,ploidies):
     I4 = np.zeros((len(SM),4))
@@ -170,7 +94,6 @@ def get_resort_order(inds1,inds2):
 # possible additions to the diemtype class:
 #   re-polarize function:  takes an alternate polarity and changes state matrix. could 'de-polarize' data, as the input data is always '0' polarity
 class DiemType:
-    
     """
     Class describing the raw data for state matrices, and functions for thresholding, kernel smoothing, etc.
     
@@ -199,7 +122,6 @@ class DiemType:
     :ivar threshold: float. Threshold value to be set.
     :ivar smoothScale: float. Scale for kernel smoothing, to be set.
     :ivar contigMatrix: np.ndarray dtype=object. Matrix of Contig objects, to be created.
-
     """
 
     def __init__(self,DMBC, indNames, chrPloidies, chrNames, posByChr,chrLengths,exclusionsByChr=None,indExclusions=None):
@@ -238,6 +160,29 @@ class DiemType:
             mapLength = self.posByChr[idx]
             mapLength = mapLength/self.chrLengths[idx]
             self.MapBC.append(mapLength)
+
+    def add_individual_exclusions(self,filePath):
+        df = pd.read_csv(filePath,header=None)
+        self.indExclusions = np.array(df.iloc[:,0].tolist())
+
+    def add_site_exclusions(self,filePath):
+        self.siteExclusionsByChr = [None]*len(self.chrNames)
+        with open(filePath,'r') as f:
+            for line in f:
+                clean_line = line.strip()
+                chrName, start,end = clean_line.split('\t')
+                start = int(start)+1
+                end = int(end)+1
+
+                chrIdx = np.where(self.chrNames == chrName)[0][0]
+                
+                if self.siteExclusionsByChr[chrIdx] == None:
+                    self.siteExclusionsByChr[chrIdx] = []
+                
+                #append the indices of the positions in self.posByChr[chrIdx] that are >= start and < end
+                indices = np.where((self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end))[0]
+                self.siteExclusionsByChr[chrIdx] = self.siteExclusionsByChr[chrIdx] + indices.tolist()
+        
 
     def computeHIs(self):
         """

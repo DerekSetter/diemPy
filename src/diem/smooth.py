@@ -205,19 +205,3 @@ def laplace_smooth_multiple_haplotypes_parallel(posArr, valArr, scale):
             res[haplotypeIndex][focusIdx] = v
     
     return res
-
-
-
-
-def stateMatrix_to_hapStringsList(stateM_):
-    res = []
-    for hap_ in stateM_[:]:
-        hap = np.copy(hap_)
-        hap[hap==0] = 5
-        hap = hap -1
-        hap = hap.astype(str)
-        hapStr = ''.join(hap)
-        hapStr = hapStr.replace('4','_')
-        res.append(hapStr)
-    return res
-

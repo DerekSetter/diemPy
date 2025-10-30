@@ -24,3 +24,4 @@ from . import contigs
 from . import smooth
 from . import tests
 from . import utils
+from . import io
