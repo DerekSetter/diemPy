@@ -333,3 +333,40 @@ def export_contigs_to_ind_bed_files(diemType, outputDir):
                     data.append([ivl.chrName, ivl.l-1, ivl.r-1, ivl.state])  # BED format is 0-based start, 1-based end
         dfInd = pd.DataFrame(data, columns=["chrom", "start", "end", "state"])
         dfInd.to_csv(bedFilePath, sep="\t", header=True, index=False)
+
+
+# This version does 'U' for state 0, and '0','1','2' for states 1,2,3
+# def export_contigs_to_ind_bed_files(diemType, outputDir):
+#     '''
+#     Exports contig intervals to BED files for each individual.
+
+#     Args:
+#         diemType (DiemType): DiemType object containing contig data.
+#         outputDir (str): Directory where BED files will be saved.
+#     '''
+
+#     nChrs = len(diemType.chrNames)
+#     nInds = len(diemType.indNames)
+
+#     # Ensure output directory exists
+#     os.makedirs(outputDir, exist_ok=True)
+
+#     for indIdx in range(nInds):
+
+#         indName = diemType.indNames[indIdx]
+#         bedFilePath = os.path.join(outputDir, f"{indName}_contigs.bed")
+#         data = []
+
+#         with open(bedFilePath, 'w') as bedFile:
+#             for cIdx in range(nChrs):
+#                 thisContig = diemType.contigMatrix[cIdx][indIdx]
+#                 # change diemtype state vaules of 0,1,2,3 to 'U', '0', '1', '2'
+#                 for ivl in thisContig.intervals:
+#                     state = ivl.state
+#                     if state == 0:
+#                         state = 'U'
+#                     else:
+#                         state = str(state - 1)  # Convert 1,2,3 to '0','1','2'
+#                     data.append([ivl.chrName, ivl.l-1, ivl.r-1, state])  # BED format is 0-based start, 1-based end
+#         dfInd = pd.DataFrame(data, columns=["chrom", "start", "end", "state"])
+#         dfInd.to_csv(bedFilePath, sep="\t", header=True, index=False)
