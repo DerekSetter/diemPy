@@ -94,7 +94,6 @@ def get_resort_order(inds1,inds2):
 # possible additions to the diemtype class:
 #   re-polarize function:  takes an alternate polarity and changes state matrix. could 'de-polarize' data, as the input data is always '0' polarity
 class DiemType:
-    
     """
     Class describing the raw data for state matrices, and functions for thresholding, kernel smoothing, etc.
     
@@ -123,7 +122,6 @@ class DiemType:
     :ivar threshold: float. Threshold value to be set.
     :ivar smoothScale: float. Scale for kernel smoothing, to be set.
     :ivar contigMatrix: np.ndarray dtype=object. Matrix of Contig objects, to be created.
-
     """
 
     def __init__(self,DMBC, indNames, chrPloidies, chrNames, posByChr,chrLengths,exclusionsByChr=None,indExclusions=None):
@@ -162,6 +160,33 @@ class DiemType:
             mapLength = self.posByChr[idx]
             mapLength = mapLength/self.chrLengths[idx]
             self.MapBC.append(mapLength)
+
+    def add_individual_exclusions(self,filePath):
+        df = pd.read_csv(filePath,header=None)
+        self.indExclusions = np.array(df.iloc[:,0].tolist())
+
+    def add_site_exclusions(self,filePath):
+        self.siteExclusionsByChr = [None]*len(self.chrNames)
+        with open(filePath,'r') as f:
+            for line in f:
+                clean_line = line.strip()
+                chrName, start,end = clean_line.split('\t')
+                start = int(start)+1
+                end = int(end)+1
+
+                chrIdx = np.where(self.chrNames == chrName)[0][0]
+                
+                if self.siteExclusionsByChr[chrIdx] == None:
+                    self.siteExclusionsByChr[chrIdx] = []
+                
+                #append the indices of the positions in self.posByChr[chrIdx] that are >= start and < end
+                indices = np.arange(len(self.posByChr[chrIdx]))
+                filter = (self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end)
+                indices = indices[filter]
+                print(indices[0],indices[-1])
+
+                self.siteExclusionsByChr[chrIdx] = self.siteExclusionsByChr[chrIdx] + indices.tolist()
+        
 
     def computeHIs(self):
         """
