@@ -8,7 +8,7 @@ Usage
 
 Options:
   None
- 
+  
 Features:
   vcf files of any size (eg 26Gb filesize, 474 genomes, 3.6 million sites, 37 mins (see increment...now 10 mins?)
   lossless encoding of vcf variants of up to 4 states (diptypes with further states are U-encoded)
@@ -25,7 +25,7 @@ Development: (Stuart J.E. Baird)
     2. increment: extended from '0123456789' encoding to DIEM alphabet (55 symbols; 0–9,a–z,A–S)
        This means 'main' has some stuff before the bit that resembles the original chatGPT5 vanilla VCF interpreter
     1. increment: Optimised file I/O (4x speedup).
-   
+    
     0. Inspired by vcf2diem.py by Sam Ebdon this is, however, a complete re-write.
     I asked chatGPT5 to write me a vanilla vcf interpreter (here, ± == main)
     I then added 5 functions (immediately below) and tidied.
@@ -41,6 +41,7 @@ from datetime import timedelta
 import io, gzip
 import operator
 import itertools  # used by diem_most_common_alleles (downstream tool)
+import re
 
 
 def open_text(path):
@@ -142,7 +143,7 @@ def fastGTs(sample_fields, seqLabelsString, gt_index):
     hide_exclusions = False  # internal flag
     diem_enc_a_ranks = diem_encode_allele_ranks
     diem_dec_a_ranks = diem_decode_allele_ranks
-   
+    
     seqLabels = seqLabelsString.split(',')
     GTlabelcount = [0] * diemMaxVariants
 
@@ -186,14 +187,16 @@ def fastGTs(sample_fields, seqLabelsString, gt_index):
     # ---- Early return: invariant / mono-allelic -> skip sorting & translation
     nonzero = diemMaxVariants - GTlabelcount.count(0)
     if nonzero < 2:
-        SNV = 0
         if nonzero == 0:
-            usedSeqs = [diemUencodableChar]
+            usedSeqs = [diemUencodableChar]  # no observed allele labels
         else:
-            usedSeqs = [seqLabels[0]]  # only the most-common allele is present
+            # find the only allele index with a nonzero count
+            k = next(i for i, cnt in enumerate(GTlabelcount) if cnt)
+            usedSeqs = [seqLabels[k]]
+        SNV = 0  # not a variant
         return nonzero, ','.join(usedSeqs), SNV, exclusion_invar, 'S'
     # ----
-
+    
     simpleOrder = list(range(diemMaxVariants))
     # top-N variant labels by count
     sorted_count_pos = sorted(
@@ -254,6 +257,7 @@ def main():
     chromosome_tally = Counter()
     minpos = {}   # chrom -> min start
     maxpos = {}   # chrom -> max end
+    contig_lengths = {}  # chrom -> reference length (1-based length; end-exclusive in 0-based)
     nvars = necls = 0
 
     with open_text(file_path) as vcf, \
@@ -269,6 +273,12 @@ def main():
         last_fmt = None
 
         for line in vcf:
+            if line.startswith('##contig='):
+                m = re.search(r'ID=([^,>]+).*?length=(\d+)', line)
+                if m:
+                    cid, clen = m.group(1), int(m.group(2))
+                    contig_lengths[cid] = clen
+                continue
             if line.startswith('##'):
                 continue
             if line.startswith('#CHROM'):
@@ -299,7 +309,7 @@ def main():
 
             # Interpret GTs fast (no intermediate genotypes list)
             nVNTs, ordered_SAs, SNV, exclusion_criterion, dg = fastGTs(sample_fields, ref + ',' + alt, gt_index)
-           
+            
             if exclusion_criterion == exclusion_NOT:
                 vout.write(f"{chrom}\t{start}\t{end}\t{qual}\t{ref}\t{ordered_SAs}\t{SNV}\t{nVNTs}\t{exclusion_criterion}\t{dg}\n")
                 nvars += 1
@@ -310,13 +320,24 @@ def main():
                 xout.write(f"{chrom}\t{start}\t{end}\t{qual}\t{ref}\t{ordered_SAs}\t{SNV}\t{nVNTs}\t{exclusion_criterion}\t{dg}\n")
                 necls += 1
 
-    # Write META (once, buffered)
+    # Write META (once, buffered) -- all 0-based
     default_ploidy = ['2'] * len(samples)
     with open_out(meta_output_path) as mout:
-        mout.write('#Chrom\tStart_diem_input\tEnd_diem_input\tn(diem_inputs)\t' + '\t'.join(samples) + '\n')
+        mout.write(
+            '#Chrom\tRefStart0\tRefEnd0\tFirstVariantStart0\tLastVariantPos0\t'
+            'n(diem_inputs)\t' + '\t'.join(samples) + '\n'
+        )
         for chrom, count in chromosome_tally.items():
-            mout.write(f"{chrom}\t{minpos[chrom]}\t{maxpos[chrom]}\t{count}\t" + '\t'.join(default_ploidy) + '\n')
-
+            ref_start0 = '0'
+            # BED-style end-exclusive: if length is L, RefEnd0 = L
+            ref_end0 = str(contig_lengths.get(chrom, ''))  # empty if unknown
+            first_var_start0 = minpos[chrom]               # already 0-based in your code
+            last_variant_pos0 = str(int(maxpos[chrom]) - 1)  # convert 1-based VCF to 0-based
+            mout.write(
+                f"{chrom}\t{ref_start0}\t{ref_end0}\t{first_var_start0}\t{last_variant_pos0}\t"
+                f"{count}\t" + '\t'.join(default_ploidy) + '\n'
+            )
+            
     total = nvars + necls
     print(f"{total:,d} vcf sites for {len(samples)} genomes, split to {nvars:,d} diem variants with {necls:,d} excluded. ({round(100 * necls / max(total,1))}% reduction).")
     print(f"diem_meta.bed data saved to {meta_output_path}")
