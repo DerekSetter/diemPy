@@ -245,17 +245,24 @@ class DiemType:
         '''
         inds1 = self.indNames
         inds2 = d2.indNames
-        same = np.array_equal(inds1, inds2)
-        if not same:
+
+        if np.array_equal(inds1,inds2):
+            print("the datasets are already in the same order")
+            return None
+        
+        sameSet = np.array_equal(np.sort(inds1), np.sort(inds2))
+        if not sameSet:
             print("the datasets do not contain the same individuals")
             return None
         else:
-            newOrder = get_resort_order(inds1,inds2)
+            newOrder = get_resort_order(inds2,inds1)
+            print(newOrder)
             for idx,arr in enumerate(self.DMBC):
                 self.DMBC[idx] = arr[newOrder,:]
                 self.chrPloidies[idx] = self.chrPloidies[idx][newOrder]
             self.indNames = self.indNames[newOrder]
-            self.HIs = newHIs[newOrder]
+            self.HIs = self.HIs[newOrder]
+
 
             if self.contigMatrix is not None:
                 for idx, arr in enumerate(self.contigMatrix):
