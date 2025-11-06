@@ -335,7 +335,7 @@ class DiemType:
         if self.indExclusions is not None:
             indExcludedIndices = np.where(np.isin(self.indNames,self.indExclusions))[0]
 
-        a = copy.deepcopy(self)
+
         print("convert state matrix to Marray")
         initMBC = [pol.stateMatrix_to_MArray(x) for x in a.DMBC]
         initPolBC = []
@@ -361,8 +361,11 @@ class DiemType:
             MBC_out, polBC_out, DIBC_out,SupportBC_out = pol.run_em_parallel(initMBC, initPolBC, self.chrPloidies,sitesExcludedByChr=self.siteExclusionsByChr,individualsExcluded=indExcludedIndices,maxItt=maxItt,epsilon=epsilon,nCPUs=ncores)
 
         print("updating polarizations, DIs, Supports, initialPolarity,and state matrices")
+
+        a = copy.deepcopy(self)
+        #a = self  #this will modify the original instance, not what we want
         
-        a.initialPolByChr = [x for x in initPolBC] # ensure this is a copy, not reference. 
+        a.initialPolByChr = [x for x in initPolBC] # ensure this is a copy, not reference.
         a.PolByChr = polBC_out
         a.DIByChr = DIBC_out
         a.SupportByChr = SupportBC_out

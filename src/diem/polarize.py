@@ -191,7 +191,7 @@ def MArray_to_stateMatrix(M):
 #     return stateMatrix
 
 
-def stateMatrix_to_MArray(SM):
+def stateMatrix_to_MArray_old(SM):
     nMarkers = SM.shape[1]
     nInds = SM.shape[0]
     Marr = np.zeros((nMarkers,nInds,4),dtype=np.int8)
@@ -199,6 +199,21 @@ def stateMatrix_to_MArray(SM):
         for indIdx in range(nInds):
             state = SM[indIdx][markerIdx]
             Marr[markerIdx][indIdx][state] = 1
+    return Marr
+
+def stateMatrix_to_MArray(SM): #eye method suggested by AI
+    """
+    Ultra-fast version using identity matrix trick.
+    This is likely the fastest approach.
+    """
+    nInds, nMarkers = SM.shape
+    
+    # Use identity matrix to create one-hot encoding
+    eye = np.eye(4, dtype=np.int8)
+    
+    # Direct indexing with broadcasting
+    Marr = eye[SM].transpose(1, 0, 2)
+    
     return Marr
 
 
