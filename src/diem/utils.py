@@ -17,32 +17,34 @@ from . import smooth as ks
 import matplotlib.pyplot as plt
 from matplotlib import colors
 
-#this version better matches sam's map 
-mycmap = colors.ListedColormap(['w','b','y','g'])
-bounds = [-.5,.5,1.5,2.5,3.5]
-norm = colors.BoundaryNorm(bounds,mycmap.N)
 
-mycmap2 = colors.ListedColormap(['LightGray','w','b','y','g'])
-bounds2 = [-1.5,-.5,.5,1.5,2.5,3.5]
-norm2 = colors.BoundaryNorm(bounds2,mycmap2.N)
-
-
-
-
-
-
+# copied from https://github.com/Studenecivb/CarpePy/blob/main/carpepy/core_functions.py#L374
+# to match the colors across implementations
+diemColors4 = [
+    'white',
+    colors.to_hex((128/255, 0, 128/255)),  # RGBColor[128/255, 0, 128/255] - Purple
+    colors.to_hex((255/255, 229/255, 0)),  # RGBColor[255/255, 229/255, 0] - Yellow
+    colors.to_hex((0, 128/255, 128/255))   # RGBColor[0, 128/255, 128/255] - Teal
+]
+diemColors5 = [
+    'LightGray',
+    'white',
+    colors.to_hex((128/255, 0, 128/255)),  # RGBColor[128/255, 0, 128/255] - Purple
+    colors.to_hex((255/255, 229/255, 0)),  # RGBColor[255/255, 229/255, 0] - Yellow
+    colors.to_hex((0, 128/255, 128/255))   # RGBColor[0, 128/255, 128/255] - Teal
+]
+bounds5 = [-1.5,-.5,.5,1.5,2.5,3.5]
 
 
 '''
 Some utility functions for working with the data and results
 '''
 
-
 def plot_painting(diemMatrix):
     '''
      Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.'''
     # for a single chromosome in the 'stateMatrixByChromsome'
-    mycmap = colors.ListedColormap(['w','b','y','g'])
+    mycmap = colors.ListedColormap( diemColors4)
     bounds = [-.5,.5,1.5,2.5,3.5]
     norm = colors.BoundaryNorm(bounds,mycmap.N)
     
@@ -51,7 +53,6 @@ def plot_painting(diemMatrix):
     ax.set_yticks([])
     ax.set_yticklabels([])
     plt.show()
-
 
 
 def characterize_markers(dt):
