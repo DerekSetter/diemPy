@@ -167,21 +167,36 @@ class DiemType:
 
     def add_site_exclusions(self,filePath):
         self.siteExclusionsByChr = [None]*len(self.chrNames)
+        skipped_chromosomes = set()
+        
         with open(filePath,'r') as f:
             for line in f:
                 clean_line = line.strip()
-                chrName, start,end = clean_line.split('\t')
-                start = int(start)+1
-                end = int(end)+1
+                if not clean_line:  # Skip empty lines
+                    continue
+                    
+                chrName, start, end = clean_line.split('\t')
+                start = int(start) + 1
+                end = int(end) + 1
 
-                chrIdx = np.where(self.chrNames == chrName)[0][0]
+                # Check if chromosome exists in dataset
+                chr_matches = np.where(self.chrNames == chrName)[0]
+                if len(chr_matches) == 0:
+                    skipped_chromosomes.add(chrName)
+                    continue
+                    
+                chrIdx = chr_matches[0]
                 
-                if self.siteExclusionsByChr[chrIdx] == None:
+                if self.siteExclusionsByChr[chrIdx] is None:
                     self.siteExclusionsByChr[chrIdx] = []
                 
-                #append the indices of the positions in self.posByChr[chrIdx] that are >= start and < end
+                # Append the indices of the positions in self.posByChr[chrIdx] that are >= start and < end
                 indices = np.where((self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end))[0]
                 self.siteExclusionsByChr[chrIdx] = self.siteExclusionsByChr[chrIdx] + indices.tolist()
+        
+        # Report any skipped chromosomes
+        if skipped_chromosomes:
+            print(f"Warning: The following chromosomes in the exclusions file were not found in the dataset and were skipped: {sorted(skipped_chromosomes)}")
         
 
     def computeHIs(self):
@@ -337,7 +352,7 @@ class DiemType:
 
 
         print("convert state matrix to Marray")
-        initMBC = [pol.stateMatrix_to_MArray(x) for x in a.DMBC]
+        initMBC = [pol.stateMatrix_to_MArray(x) for x in self.DMBC]
         initPolBC = []
 
         if boolTestData == True:
