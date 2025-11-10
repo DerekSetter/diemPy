@@ -38,7 +38,12 @@ def get_intervals(chrName, indName, statesList, posList, includeSingle = True):
     lidx = 0
     ridx = 0
     ivls = []
+
+    if len(statesList) == 0:
+        return ivls
+    
     while ridx <= len(statesList)-1:
+        currentState = statesList[lidx]
 
         if ridx == len(statesList)-1:
             l = posList[lidx]
@@ -52,7 +57,6 @@ def get_intervals(chrName, indName, statesList, posList, includeSingle = True):
                     ivls.append(iv)
             break
 
-        currentState = statesList[lidx]
         if statesList[ridx+1] == currentState:
             ridx += 1
         else:
@@ -69,7 +73,6 @@ def get_intervals(chrName, indName, statesList, posList, includeSingle = True):
 
             ridx +=1
             lidx=ridx
-            currentState = statesList[lidx]
             
     return ivls
 
