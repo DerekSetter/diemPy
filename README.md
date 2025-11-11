@@ -1,10 +1,10 @@
 # diemPy
 
-A Python package for genome polarization and subsequent analyses using the diem (Diagnostic Index for the Expectation Maximization) method.
+A Python package for genome polarization and subsequent analyses using the `diem` (Diagnostic Index for the Expectation Maximization) method.
 
 ## Overview
 
-diemPy is a computational tool designed to polarize genomic data for hybrid zone analysis. The package implements an expectation-maximization (EM) algorithm to determine the optimal polarization of genetic markers, enabling researchers to identify and analyze patterns of introgression and hybridization in genomic datasets.
+`diemPy` is a computational tool designed to polarize genomic data for hybrid zone analysis. The package implements an expectation-maximization (EM) algorithm to determine the optimal polarization of genetic markers, enabling researchers to identify and analyze patterns of introgression and hybridization in genomic datasets.
 
 ### Key Features
 - **VCF Processing**: Direct conversion from VCF files to diem format
@@ -56,7 +56,7 @@ Key methods:
 
 
 
-## Installation and Getting Started
+## Installation
 
 
 To install `diem`, first set up a new conda environment:
@@ -73,15 +73,37 @@ install `diem` using pip. From within your conda environment, and in the diem di
 python -m pip install .
 ```
 
-`diem` can be installed as a package and used in any python script. This means that the big tasks like polarization can be offloaded to a computing cluster. However, for many datasets, `diem` can run on a modern laptop. We recommend using `diem` and exploring the data within a jupyter notebook, and we provide an example workflow as a starting point (notebooks/derek_input_and_process_output.ipynb).  To install install and run jupyter lab:
+`diem` can be installed as a package and used in any python script. This means that the big tasks like polarization can be offloaded to a computing cluster. However, for many datasets, `diem` can run on a modern laptop. We recommend using `diem` and exploring the data within a jupyter notebook, and we provide an example workflow as a starting point. To install jupyter lab:
 
 ```sh
 conda install -c conda-forge jupyterlab
 ```  
 
-Copy the example notebook (notebooks/derek_input_and_process_output.ipynb) and paste it into a directory where you will store and analyse your data. Then, in a terminal, navigate to your root directory and run jupyter lab. This will open a new browser tab or window.
+
+## Getting started
+
+### Converting VCF to diem input files
+
+The package includes a command-line tool for VCF conversion. input.vcf is the path to your vcf file.
+
+```bash
+vcf2diem input.vcf
+```
+
+This generates three output files placed in the same directory as the input vcf:
+- `input.vcf.diem_input.bed`: Variant input for diem analysis
+- `input.vcf.diem_exclude.bed`: Sites excluded from analysis
+- `input.vcf.diem_meta.bed`: Metadata for diem analysis
+
+
+### Polarization and Processing
+
+Copy the example notebook (notebooks/derek_input_and_process_output.ipynb) and paste it into your working directory, for example, where you will store and analyse your data. 
+
+Then, in a terminal, navigate to your home directory and run jupyter lab. This will open a new browser tab or window. (Starting it from your home directory lets you use the internal final browser and makes auto-completiton work better.) 
 
 ```sh
+conda activate diem
 cd ~
 jupyter lab
 ```
@@ -131,22 +153,10 @@ Note that at any time, a diemtype object may be saved or loaded directly. This i
 #save the smoothed diemtype object
 save_DiemType('output.diemtype',d_smooth)
 
-#load the diemtype back in 
+#load the diemtype back in for further analysis
 d_smooth = load_DiemType('output.diemtype')
 ```
 
-## Command Line Tools
-
-The package includes a command-line tool for VCF conversion:
-
-```bash
-vcf2diem input.vcf
-```
-
-This generates three output files:
-- `input.vcf.diem_input.bed`: Variant input for diem analysis
-- `input.vcf.diem_exclude.bed`: Sites excluded from analysis
-- `input.vcf.diem_meta.bed`: Metadata for diem analysis
 
 ## Dependencies
 
