@@ -1,3 +1,5 @@
+# Example Workflow
+
 Copy the example notebook (notebooks/derek_input_and_process_output.ipynb) and paste it into your working directory, for example, where you will store and analyse your data. 
 
 Then, in a terminal, navigate to your home directory and run jupyter lab. This will open a new browser tab or window. (Starting it from your home directory lets you use the internal final browser and makes auto-completiton work better.) 
@@ -9,6 +11,9 @@ jupyter lab
 ```
 
 From within jupyter lab, on the left, navigate to your working directory and open the example notebook.  
+
+
+# Quick start
 
 We recommend you check out the example notebook.  However, here is a minium set of commands to perform a full processing of the data
 

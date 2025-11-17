@@ -1,3 +1,5 @@
+# VCF Conversion
+
 The package includes a command-line tool for VCF conversion. input.vcf is the path to your vcf file.
 
 ```bash
