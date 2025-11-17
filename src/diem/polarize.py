@@ -191,7 +191,7 @@ def MArray_to_stateMatrix(M):
 #     return stateMatrix
 
 
-def stateMatrix_to_MArray(SM):
+def stateMatrix_to_MArray_old(SM):
     nMarkers = SM.shape[1]
     nInds = SM.shape[0]
     Marr = np.zeros((nMarkers,nInds,4),dtype=np.int8)
@@ -199,6 +199,21 @@ def stateMatrix_to_MArray(SM):
         for indIdx in range(nInds):
             state = SM[indIdx][markerIdx]
             Marr[markerIdx][indIdx][state] = 1
+    return Marr
+
+def stateMatrix_to_MArray(SM): #eye method suggested by AI
+    """
+    Ultra-fast version using identity matrix trick.
+    This is likely the fastest approach.
+    """
+    nInds, nMarkers = SM.shape
+    
+    # Use identity matrix to create one-hot encoding
+    eye = np.eye(4, dtype=np.int8)
+    
+    # Direct indexing with broadcasting
+    Marr = eye[SM].transpose(1, 0, 2)
+    
     return Marr
 
 
@@ -233,31 +248,48 @@ def em_worker(lims, MBC_cat_shape, polBC_cat_shape, DIBC_cat_shape, Support_cat_
     DIBC_cat = np.ndarray(DIBC_cat_shape, dtype=np.float64, buffer=shm_DIBC_cat.buf)
     Support_cat = np.ndarray(Support_cat_shape, dtype=np.float64, buffer=shm_Support_cat.buf)
 
-    flipDict = {}
+    # flipDict = {}
+    # l = lims[0]
+    # r = lims[1]
+
+    # for idx in range(l,r,1):
+    #     p = polBC_cat[idx]
+    #     m = MBC_cat[idx]
+    #     key = (m.tobytes(), p)
+    #     if key in flipDict:
+    #         newM, newP, newDI, newS = flipDict[key]
+    #         MBC_cat[idx] = newM
+    #         polBC_cat[idx] = newP
+    #         DIBC_cat[idx] = newDI
+    #         Support_cat[idx] = newS
+    #     else:
+    #         mf = m[:, [0, 3, 2, 1]]
+    #         mLike = np.sum(m * LP4)
+    #         mfLike = np.sum(mf * LP4)
+    #         if mfLike > mLike:
+    #             MBC_cat[idx] = mf
+    #             polBC_cat[idx] = 1 - p
+    #         diagnosticIndex = max(mLike, mfLike)
+    #         DIBC_cat[idx] = diagnosticIndex
+    #         Support_cat[idx] = diagnosticIndex - min(mLike, mfLike)
+    #         flipDict[key] = [MBC_cat[idx], polBC_cat[idx], DIBC_cat[idx], Support_cat[idx]]
+
     l = lims[0]
     r = lims[1]
-
     for idx in range(l,r,1):
         p = polBC_cat[idx]
         m = MBC_cat[idx]
-        key = (m.tobytes(), p)
-        if key in flipDict:
-            newM, newP, newDI, newS = flipDict[key]
-            MBC_cat[idx] = newM
-            polBC_cat[idx] = newP
-            DIBC_cat[idx] = newDI
-            Support_cat[idx] = newS
-        else:
-            mf = m[:, [0, 3, 2, 1]]
-            mLike = np.sum(m * LP4)
-            mfLike = np.sum(mf * LP4)
-            if mfLike > mLike:
-                MBC_cat[idx] = mf
-                polBC_cat[idx] = 1 - p
-            diagnosticIndex = max(mLike, mfLike)
-            DIBC_cat[idx] = diagnosticIndex
-            Support_cat[idx] = diagnosticIndex - min(mLike, mfLike)
-            flipDict[key] = [MBC_cat[idx], polBC_cat[idx], DIBC_cat[idx], Support_cat[idx]]
+        
+        mf = m[:, [0, 3, 2, 1]]
+        mLike = np.sum(m * LP4)
+        mfLike = np.sum(mf * LP4)
+        if mfLike > mLike:
+            MBC_cat[idx] = mf
+            polBC_cat[idx] = 1 - p
+        diagnosticIndex = max(mLike, mfLike)
+        DIBC_cat[idx] = diagnosticIndex
+        Support_cat[idx] = diagnosticIndex - min(mLike, mfLike)
+
 
     shm_MBC_cat.close()
     shm_polBC_cat.close()
@@ -274,7 +306,7 @@ def em_worker(lims, MBC_cat_shape, polBC_cat_shape, DIBC_cat_shape, Support_cat_
 # this could be an issue of the parallel overhead outweighing the benefits of more cores
 # on larger data, the speedup should be more pronounced
 def run_em_parallel(
-        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99, nCPUs = None):
+        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99999, nCPUs = None):
     # should sites be specified as 'included' or 'excluded'
     # per-scaffoled stuff, inversions, 
     ''' 
@@ -501,7 +533,7 @@ def run_em_parallel(
 # it may be more memory efficient, as it does not require the shared memory overhead... but need to check this
 # if user requests only one core from the diplotype.polarize function (the default value), this function is used 
 def run_em_linear(
-        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99):
+        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99999):
     
     ''' Run the EM algorithm in serial to Polarize the genome.
 
@@ -618,41 +650,61 @@ def run_em_linear(
 
         # EM step: getting the new polarity
 
-    
-        flipDict = {}
+        
         for idxChr in range(nChroms):
             for idxMarker in range(nMarkersBC[idxChr]):
                 p = polBC[idxChr][idxMarker]
                 m = MBC[idxChr][idxMarker]
 
-                # More memory efficient key using hash instead of full bytes
-                key = (hash(m.tobytes()),p)
-                if key in flipDict:
-                    newM, newP, newDI, newS = flipDict[key]
-                    MBC[idxChr][idxMarker] = newM
-                    polBC[idxChr][idxMarker] = newP
-                    DIBC[idxChr][idxMarker] = newDI
-                    SupportBC[idxChr][idxMarker] = newS
-                else:
-                    mf = m[:,[0,3,2,1]]
-                    mLike = np.sum(m*LP4)
-                    mfLike = np.sum(mf*LP4)
-                    if mfLike > mLike:
-                        MBC[idxChr][idxMarker] = mf
-                        if p ==0:
-                            polBC[idxChr][idxMarker] = 1
-                        else:
-                            polBC[idxChr][idxMarker] = 0
-                    diagnosticIndex = max(mLike,mfLike)
-                    support = diagnosticIndex - min(mLike,mfLike)
-                    SupportBC[idxChr][idxMarker] = support
-                    DIBC[idxChr][idxMarker] = diagnosticIndex
-                    flipDict[key] = [
-                        MBC[idxChr][idxMarker],
-                        polBC[idxChr][idxMarker],
-                        DIBC[idxChr][idxMarker],
-                        SupportBC[idxChr][idxMarker]
-                    ]
+   
+                mf = m[:,[0,3,2,1]]
+                mLike = np.sum(m*LP4)
+                mfLike = np.sum(mf*LP4)
+                if mfLike > mLike:
+                    MBC[idxChr][idxMarker] = mf
+                    if p ==0:
+                        polBC[idxChr][idxMarker] = 1
+                    else:
+                        polBC[idxChr][idxMarker] = 0
+                diagnosticIndex = max(mLike,mfLike)
+                support = diagnosticIndex - min(mLike,mfLike)
+                SupportBC[idxChr][idxMarker] = support
+                DIBC[idxChr][idxMarker] = diagnosticIndex
+
+        # flipDict = {}
+        # for idxChr in range(nChroms):
+        #     for idxMarker in range(nMarkersBC[idxChr]):
+        #         p = polBC[idxChr][idxMarker]
+        #         m = MBC[idxChr][idxMarker]
+
+        #         # More memory efficient key using hash instead of full bytes
+        #         key = (hash(m.tobytes()),p)
+        #         if key in flipDict:
+        #             newM, newP, newDI, newS = flipDict[key]
+        #             MBC[idxChr][idxMarker] = newM
+        #             polBC[idxChr][idxMarker] = newP
+        #             DIBC[idxChr][idxMarker] = newDI
+        #             SupportBC[idxChr][idxMarker] = newS
+        #         else:
+        #             mf = m[:,[0,3,2,1]]
+        #             mLike = np.sum(m*LP4)
+        #             mfLike = np.sum(mf*LP4)
+        #             if mfLike > mLike:
+        #                 MBC[idxChr][idxMarker] = mf
+        #                 if p ==0:
+        #                     polBC[idxChr][idxMarker] = 1
+        #                 else:
+        #                     polBC[idxChr][idxMarker] = 0
+        #             diagnosticIndex = max(mLike,mfLike)
+        #             support = diagnosticIndex - min(mLike,mfLike)
+        #             SupportBC[idxChr][idxMarker] = support
+        #             DIBC[idxChr][idxMarker] = diagnosticIndex
+        #             flipDict[key] = [
+        #                 MBC[idxChr][idxMarker],
+        #                 polBC[idxChr][idxMarker],
+        #                 DIBC[idxChr][idxMarker],
+        #                 SupportBC[idxChr][idxMarker]
+        #             ]
         
         # check if polarity has been seen before, and if so, stop
         polStack = np.hstack(polBC)

@@ -43,9 +43,29 @@ docs/_build/
 .DS_Store
 Thumbs.db
 
-# Project-specific exclusions
-example_data/
+# For the workflow:
+
+# Excluding specific workflow outputs and data
+
+# exclude all notebooks except the workflow example notebook
+example_workflow/*.ipynb
+!example_workflow/tutorial.ipynb 
+
+example_workflow/output/*
+
+# excluding anything in the data folder except vcf file
+example_workflow/data/*
+!example_workflow/data/example_dataset.vcf.gz
+
+example_workflow/user_files/*
+!example_workflow/user_files/masked_individuals.txt
+!example_workflow/user_files/masked_regions.bed
+!example_workflow/user_files/chrom_ploidy.tsv
+
+
+# excluding everything in the test folder
 tests/
+notebooks/
 #notebooks/*.ipynb
 #!notebooks/main_test.ipynb
 

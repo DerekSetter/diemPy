@@ -17,32 +17,34 @@ from . import smooth as ks
 import matplotlib.pyplot as plt
 from matplotlib import colors
 
-#this version better matches sam's map 
-mycmap = colors.ListedColormap(['w','b','y','g'])
-bounds = [-.5,.5,1.5,2.5,3.5]
-norm = colors.BoundaryNorm(bounds,mycmap.N)
 
-mycmap2 = colors.ListedColormap(['LightGray','w','b','y','g'])
-bounds2 = [-1.5,-.5,.5,1.5,2.5,3.5]
-norm2 = colors.BoundaryNorm(bounds2,mycmap2.N)
-
-
-
-
-
-
+# copied from https://github.com/Studenecivb/CarpePy/blob/main/carpepy/core_functions.py#L374
+# to match the colors across implementations
+diemColors4 = [
+    'white',
+    colors.to_hex((128/255, 0, 128/255)),  # RGBColor[128/255, 0, 128/255] - Purple
+    colors.to_hex((255/255, 229/255, 0)),  # RGBColor[255/255, 229/255, 0] - Yellow
+    colors.to_hex((0, 128/255, 128/255))   # RGBColor[0, 128/255, 128/255] - Teal
+]
+diemColors5 = [
+    'LightGray',
+    'white',
+    colors.to_hex((128/255, 0, 128/255)),  # RGBColor[128/255, 0, 128/255] - Purple
+    colors.to_hex((255/255, 229/255, 0)),  # RGBColor[255/255, 229/255, 0] - Yellow
+    colors.to_hex((0, 128/255, 128/255))   # RGBColor[0, 128/255, 128/255] - Teal
+]
+bounds5 = [-1.5,-.5,.5,1.5,2.5,3.5]
 
 
 '''
 Some utility functions for working with the data and results
 '''
 
-
 def plot_painting(diemMatrix):
     '''
      Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.'''
     # for a single chromosome in the 'stateMatrixByChromsome'
-    mycmap = colors.ListedColormap(['w','b','y','g'])
+    mycmap = colors.ListedColormap( diemColors4)
     bounds = [-.5,.5,1.5,2.5,3.5]
     norm = colors.BoundaryNorm(bounds,mycmap.N)
     
@@ -50,6 +52,67 @@ def plot_painting(diemMatrix):
     ax.pcolormesh(diemMatrix, cmap = mycmap, norm=norm)
     ax.set_yticks([])
     ax.set_yticklabels([])
+    plt.show()
+
+def plot_painting_with_positions(diemMatrix, positions,markerWidth=25):
+    '''
+    Plot a painting of a diemMatrix with proper spacing based on physical positions,
+    showing blank spaces between markers.
+    
+    Args:
+        diemMatrix: A diem matrix for a single chromosome (element of diemtype.DMBC)
+        positions: Array of physical positions for each marker (element of diemtype.posByChr)
+        markerWidth: Half-width of each marker's visual representation (in base pairs)
+    '''
+    # for a single chromosome in the 'stateMatrixByChromsome'
+    mycmap = colors.ListedColormap(diemColors4)
+    bounds = [-.5,.5,1.5,2.5,3.5]
+    norm = colors.BoundaryNorm(bounds,mycmap.N)
+    
+    fig, ax = plt.subplots(figsize=(16,4))
+    
+    # Each marker gets a narrow bin (2 bp wide: 1 bp left and right of position)
+    # Gaps between markers will show as blank space
+    x_edges = np.zeros(len(positions) + 1)
+    
+    if len(positions) == 1:
+        # Handle single position case
+        x_edges[0] = positions[0] - 1
+        x_edges[1] = positions[0] + 1
+    else:
+        # Create edges for each marker spanning exactly 1 bp on each side
+        # This will leave gaps where markers are far apart
+        for i in range(len(positions)):
+            x_edges[i] = positions[i] - 1
+        x_edges[-1] = positions[-1] + 1
+    
+    # Individual boundaries (one more than number of individuals)
+    y_edges = np.arange(diemMatrix.shape[0] + 1)
+    
+    # Plot each marker individually to show gaps
+    for i in range(len(positions)):
+        # Create a small mesh for this single marker
+        x_marker = [positions[i] - markerWidth, positions[i] + markerWidth]
+        X_marker, Y_marker = np.meshgrid(x_marker, y_edges)
+        
+        # Extract data for this marker (column i of the matrix)
+        marker_data = diemMatrix[:, i:i+1]  # Keep as 2D array
+        
+        # Plot this marker
+        ax.pcolormesh(X_marker, Y_marker, marker_data, cmap=mycmap, norm=norm)
+    
+    ax.set_yticks([])
+    ax.set_yticklabels([])
+    ax.set_xlabel('Physical Position (bp)')
+    
+    # Set x-axis limits to show the full range
+    ax.set_xlim(positions[0] - (positions[-1] - positions[0]) * 0.05, 
+                positions[-1] + (positions[-1] - positions[0]) * 0.05)
+    
+    # Format x-axis to show positions in a readable way
+    ax.ticklabel_format(style='scientific', axis='x', scilimits=(0,0))
+    
+    #plt.tight_layout()
     plt.show()
 
 

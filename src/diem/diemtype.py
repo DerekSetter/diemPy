@@ -5,6 +5,7 @@ import numpy as np
 import copy
 import pandas as pd
 import pickle
+import multiprocessing as mp
 
 # useful function for flipping the polarity of a diem matrix.
 # needed so that we can read in the 'polarized' output of diem
@@ -167,21 +168,36 @@ class DiemType:
 
     def add_site_exclusions(self,filePath):
         self.siteExclusionsByChr = [None]*len(self.chrNames)
+        skipped_chromosomes = set()
+        
         with open(filePath,'r') as f:
             for line in f:
                 clean_line = line.strip()
-                chrName, start,end = clean_line.split('\t')
-                start = int(start)+1
-                end = int(end)+1
+                if not clean_line:  # Skip empty lines
+                    continue
+                    
+                chrName, start, end = clean_line.split('\t')
+                start = int(start) + 1
+                end = int(end) + 1
 
-                chrIdx = np.where(self.chrNames == chrName)[0][0]
+                # Check if chromosome exists in dataset
+                chr_matches = np.where(self.chrNames == chrName)[0]
+                if len(chr_matches) == 0:
+                    skipped_chromosomes.add(chrName)
+                    continue
+                    
+                chrIdx = chr_matches[0]
                 
-                if self.siteExclusionsByChr[chrIdx] == None:
+                if self.siteExclusionsByChr[chrIdx] is None:
                     self.siteExclusionsByChr[chrIdx] = []
                 
-                #append the indices of the positions in self.posByChr[chrIdx] that are >= start and < end
+                # Append the indices of the positions in self.posByChr[chrIdx] that are >= start and < end
                 indices = np.where((self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end))[0]
                 self.siteExclusionsByChr[chrIdx] = self.siteExclusionsByChr[chrIdx] + indices.tolist()
+        
+        # Report any skipped chromosomes
+        if skipped_chromosomes:
+            print(f"Warning: The following chromosomes in the exclusions file were not found in the dataset and were skipped: {sorted(skipped_chromosomes)}")
         
 
     def computeHIs(self):
@@ -245,17 +261,24 @@ class DiemType:
         '''
         inds1 = self.indNames
         inds2 = d2.indNames
-        same = np.array_equal(inds1, inds2)
-        if not same:
+
+        if np.array_equal(inds1,inds2):
+            print("the datasets are already in the same order")
+            return None
+        
+        sameSet = np.array_equal(np.sort(inds1), np.sort(inds2))
+        if not sameSet:
             print("the datasets do not contain the same individuals")
             return None
         else:
-            newOrder = get_resort_order(inds1,inds2)
+            newOrder = get_resort_order(inds2,inds1)
+            print(newOrder)
             for idx,arr in enumerate(self.DMBC):
                 self.DMBC[idx] = arr[newOrder,:]
                 self.chrPloidies[idx] = self.chrPloidies[idx][newOrder]
             self.indNames = self.indNames[newOrder]
-            self.HIs = newHIs[newOrder]
+            self.HIs = self.HIs[newOrder]
+
 
             if self.contigMatrix is not None:
                 for idx, arr in enumerate(self.contigMatrix):
@@ -308,13 +331,13 @@ class DiemType:
 
     #note that these optional arguments are currently defined in the run_em_linear and run_em_parallel functions
     #meaning they are actually over-ridden here. Not a huge issue but could be refactored later if desired 
-    def polarize(self,ncores=1,boolTestData=False,maxItt=500,epsilon=0.99,sort_by_HI=False):
+    def polarize(self,ncores=None,boolTestData=False,maxItt=500,epsilon=0.99999,sort_by_HI=False):
 
         """
         Polarize the state matrices by initializing test polarities and running the EM algorithm. Does not change self, but rather returns a polarized copy. Note that it will use the individual and site exclusions defined in self. 
 
         Args:
-            ncores (int): number of cores to use for parallel processing. If 1, runs in serial.
+            ncores (int): number of cores to use for parallel processing. Default is None, which uses all available cores.
             boolTestData (bool): if True, initializes polarity using test data method. If False, initializes polarity randomly.
             maxItt (int, optional): Maximum number of iterations for the EM algorithm. Default is 500.
             epsilon (float, optional): Convergence threshold for the EM algorithm. Default is 0.99
@@ -323,14 +346,17 @@ class DiemType:
             DiemType: A new DiemType instance with polarized data.
         """
 
+        if ncores is None:
+            ncores = mp.cpu_count()
+
         indExcludedIndices = None
 
         if self.indExclusions is not None:
             indExcludedIndices = np.where(np.isin(self.indNames,self.indExclusions))[0]
 
-        a = copy.deepcopy(self)
+
         print("convert state matrix to Marray")
-        initMBC = [pol.stateMatrix_to_MArray(x) for x in a.DMBC]
+        initMBC = [pol.stateMatrix_to_MArray(x) for x in self.DMBC]
         initPolBC = []
 
         if boolTestData == True:
@@ -354,8 +380,11 @@ class DiemType:
             MBC_out, polBC_out, DIBC_out,SupportBC_out = pol.run_em_parallel(initMBC, initPolBC, self.chrPloidies,sitesExcludedByChr=self.siteExclusionsByChr,individualsExcluded=indExcludedIndices,maxItt=maxItt,epsilon=epsilon,nCPUs=ncores)
 
         print("updating polarizations, DIs, Supports, initialPolarity,and state matrices")
+
+        a = copy.deepcopy(self)
+        #a = self  #this will modify the original instance, not what we want
         
-        a.initialPolByChr = [x for x in initPolBC] # ensure this is a copy, not reference. 
+        a.initialPolByChr = [x for x in initPolBC] # ensure this is a copy, not reference.
         a.PolByChr = polBC_out
         a.DIByChr = DIBC_out
         a.SupportByChr = SupportBC_out
