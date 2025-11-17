@@ -8,6 +8,9 @@ build:
 jupyter_book:
   config: docs/_config.yml
 
+sphinx:
+  configuration: docs/conf.py
+
 python:
   install:
     - requirements: docs/requirements.txt
