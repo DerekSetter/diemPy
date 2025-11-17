@@ -11,6 +11,7 @@ sphinx-design
 sphinxcontrib-bibtex
 sphinx-jupyterbook-latex
 sphinx-multitoc-numbering
+linkify-it-py
 matplotlib
 numpy
 pandas
