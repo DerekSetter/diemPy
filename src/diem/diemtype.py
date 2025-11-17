@@ -5,6 +5,7 @@ import numpy as np
 import copy
 import pandas as pd
 import pickle
+import multiprocessing as mp
 
 # useful function for flipping the polarity of a diem matrix.
 # needed so that we can read in the 'polarized' output of diem
@@ -330,13 +331,13 @@ class DiemType:
 
     #note that these optional arguments are currently defined in the run_em_linear and run_em_parallel functions
     #meaning they are actually over-ridden here. Not a huge issue but could be refactored later if desired 
-    def polarize(self,ncores=1,boolTestData=False,maxItt=500,epsilon=0.99999,sort_by_HI=False):
+    def polarize(self,ncores=None,boolTestData=False,maxItt=500,epsilon=0.99999,sort_by_HI=False):
 
         """
         Polarize the state matrices by initializing test polarities and running the EM algorithm. Does not change self, but rather returns a polarized copy. Note that it will use the individual and site exclusions defined in self. 
 
         Args:
-            ncores (int): number of cores to use for parallel processing. If 1, runs in serial.
+            ncores (int): number of cores to use for parallel processing. Default is None, which uses all available cores.
             boolTestData (bool): if True, initializes polarity using test data method. If False, initializes polarity randomly.
             maxItt (int, optional): Maximum number of iterations for the EM algorithm. Default is 500.
             epsilon (float, optional): Convergence threshold for the EM algorithm. Default is 0.99
@@ -344,6 +345,9 @@ class DiemType:
         Returns:
             DiemType: A new DiemType instance with polarized data.
         """
+
+        if ncores is None:
+            ncores = mp.cpu_count()
 
         indExcludedIndices = None
 
