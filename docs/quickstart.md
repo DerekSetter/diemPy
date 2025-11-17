@@ -15,7 +15,7 @@ cd ~
 jupyter lab
 ```
 
-Jupyter lab will open in your web browser. From within jupyter lab, on the left hand side you will see the file explorer. Navigate to your personal example folder, open the file workflow_example.ipynb, and follow the tutorial   
+Jupyter lab will open in your web browser. From within jupyter lab, on the left hand side you will see the file explorer. Navigate to your personal example folder, open the file tutorial.ipynb, and follow the guide processing an example dataset we have provided.   
 
 When you are ready to run diem on your own data, simply copy the workflow notebook and change the file paths accordingly
 

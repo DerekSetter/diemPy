@@ -145,6 +145,7 @@ def read_diem_bed(bed_file_path, meta_file_path):
         for idx in range(len(chrNames)):
             d.DMBC[idx] = dt.flip_polarity(d.DMBC[idx], d.PolByChr[idx])
     
+        d.HIs = d.computeHIs()
     return d
 
 

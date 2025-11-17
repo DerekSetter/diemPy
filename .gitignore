@@ -49,7 +49,7 @@ Thumbs.db
 
 # exclude all notebooks except the workflow example notebook
 example_workflow/*.ipynb
-#!example_workflow/workflow_example.ipynb 
+#!example_workflow/tutorial.ipynb 
 
 example_workflow/output/*
 
