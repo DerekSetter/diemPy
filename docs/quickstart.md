@@ -1,8 +1,13 @@
 # Example Workflow
 
-Copy the example notebook (notebooks/derek_input_and_process_output.ipynb) and paste it into your working directory, for example, where you will store and analyse your data. 
+** USE THE EXAMPLE WORKFLOW **
 
-Then, in a terminal, navigate to your home directory and run jupyter lab. This will open a new browser tab or window. (Starting it from your home directory lets you use the internal final browser and makes auto-completiton work better.) 
+** We strongly recommend using jupyter notebook in the example_workflow directory of diemPy to get started**
+
+** Please copy this to a personal folder and run it there **
+
+Let <../my_diem_example/> be the path to the copied version of the example_workflow folder that you made.
+In a terminal, navigate to that folder, and do:
 
 ```sh
 conda activate diem
@@ -10,10 +15,13 @@ cd ~
 jupyter lab
 ```
 
-From within jupyter lab, on the left, navigate to your working directory and open the example notebook.  
+Jupyter lab will open in your web browser. From within jupyter lab, on the left hand side you will see the file explorer. Navigate to your personal example folder, open the file workflow_example.ipynb, and follow the tutorial   
+
+When you are ready to run diem on your own data, simply copy the workflow notebook and change the file paths accordingly
 
 
-# Quick start
+
+# Basic Use Outline 
 
 We recommend you check out the example notebook.  However, here is a minium set of commands to perform a full processing of the data
 
