@@ -9,17 +9,14 @@ parts:
   chapters:
   - file: installation
   - file: quickstart
-- caption: Tutorial
-  label: part-tutorial
+  - file: core-concepts
+- caption: Tutorials & Examples
+  label: part-tutorials-examples
   chapters:
-  - file: workflow_dev_test
-- caption: Interface
-  label: part-interface
+  - file: vcf-conversion
+  # - file: polarization
+  # - file: post-polarization analysis
+- caption: API Reference
+  label: part-api-reference
   chapters:
-  - file: api   # I would like this to be auto-generated as in sphinx/apidoc  
-- caption: other files
-  label: part-other-files
-  chapters:
-  - file: markdown
-  - file: notebooks
-  - file: markdown-notebooks
+  - file: api
