@@ -5,9 +5,6 @@ build:
   tools:
     python: "3.11"
 
-jupyter-book:
-  config: docs/_config.yml
-
 sphinx:
   configuration: docs/conf.py
   builder: html
