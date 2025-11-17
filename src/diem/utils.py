@@ -112,7 +112,7 @@ def plot_painting_with_positions(diemMatrix, positions,markerWidth=25):
     # Format x-axis to show positions in a readable way
     ax.ticklabel_format(style='scientific', axis='x', scilimits=(0,0))
     
-    plt.tight_layout()
+    #plt.tight_layout()
     plt.show()
 
 
