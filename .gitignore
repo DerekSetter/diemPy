@@ -65,6 +65,7 @@ example_workflow/user_files/*
 
 # excluding everything in the test folder
 tests/
+notebooks/
 #notebooks/*.ipynb
 #!notebooks/main_test.ipynb
 
