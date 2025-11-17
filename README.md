@@ -42,7 +42,7 @@ This project is licensed under the GPL-3.0 License - see the [LICENSE](LICENSE) 
 
 ## Author
 
-Derek Setter (derek.setter@gmail.com)
+Derek Setter, Stuart J.E. Baird
 
 ## Citation
 [1] Baird, S. J. E., Petružela, J., Jaroň, I., Škrabánek, P., & Martínková, N. (2023). Genome polarisation for detecting barriers to geneflow. Methods in Ecology and Evolution, 14, 512–528. https://doi.org/10.1111/2041-210X.14010
