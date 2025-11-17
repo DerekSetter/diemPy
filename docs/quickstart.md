@@ -1,13 +1,13 @@
 # Example Workflow
 
-** USE THE EXAMPLE WORKFLOW **
+**USE THE EXAMPLE WORKFLOW**
 
-** We strongly recommend using jupyter notebook in the example_workflow directory of diemPy to get started**
+**We strongly recommend using jupyter notebook in the example_workflow directory of diemPy to get started**
 
-** Please copy this to a personal folder and run it there **
+**Please the 'example_workflow' directory to a personal folder and run it there**
 
-Let <../my_diem_example/> be the path to the copied version of the example_workflow folder that you made.
-In a terminal, navigate to that folder, and do:
+
+In a terminal
 
 ```sh
 conda activate diem
