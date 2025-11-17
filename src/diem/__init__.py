@@ -25,3 +25,34 @@ from . import smooth
 from . import tests
 from . import utils
 from . import io
+
+# Import key functions for direct access
+# I/O functions
+from .io import read_diem_bed
+from .io import write_polarized_bed
+from .io import update_ploidy
+
+# DiemType object handling
+from .diemtype import save_DiemType
+from .diemtype import load_DiemType
+
+# Main analysis functions
+from .polarize import run_em_parallel
+from .polarize import run_em_linear
+
+# Smoothing functions
+from .smooth import laplace_smooth_multiple_haplotypes
+from .smooth import laplace_smooth_multiple_haplotypes_parallel
+
+# Contig analysis
+from .contigs import build_contig_matrix
+from .contigs import export_contigs_to_ind_bed_files
+
+# Utility functions
+from .utils import plot_painting
+from .utils import plot_painting_with_positions
+from .utils import characterize_markers
+from .utils import count_site_differences
+
+# Make DiemType class directly accessible
+from .diemtype import DiemType
