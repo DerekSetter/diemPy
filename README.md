@@ -59,14 +59,16 @@ Key methods:
 ## Installation
 
 
-To install `diem`, first set up a new conda environment:
+To install `diem`, first download or clone the repository.
+
+Then, set up a new conda environment:
 
 ```sh
 conda create -n diem python=3.11
 conda activate diem
 ```
 
-install `diem` using pip. From within your conda environment, and in the diem directory (where the pyproect.toml file is located) and run :
+install `diem` using pip. From within your conda environment and in the diem directory (where the pyproect.toml file is located) run :
 
 
 ```sh

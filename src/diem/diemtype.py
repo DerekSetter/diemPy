@@ -330,7 +330,7 @@ class DiemType:
 
     #note that these optional arguments are currently defined in the run_em_linear and run_em_parallel functions
     #meaning they are actually over-ridden here. Not a huge issue but could be refactored later if desired 
-    def polarize(self,ncores=1,boolTestData=False,maxItt=500,epsilon=0.99,sort_by_HI=False):
+    def polarize(self,ncores=1,boolTestData=False,maxItt=500,epsilon=0.99999,sort_by_HI=False):
 
         """
         Polarize the state matrices by initializing test polarities and running the EM algorithm. Does not change self, but rather returns a polarized copy. Note that it will use the individual and site exclusions defined in self. 

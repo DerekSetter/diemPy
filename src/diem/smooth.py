@@ -128,9 +128,9 @@ def laplace_smooth_multiple_haplotypes(posArr,valArr,scale): #this version does 
 
 
 
-    if nHaplotypes >= nSites:
-        print("there are more haplotypes than sites in this dataset. check that you have passed the  position array and value array in the correct order")
-        print("continuing evaluation as if everything were normal")
+    # if nHaplotypes >= nSites:
+    #     print("there are more haplotypes than sites in this dataset. check that you have passed the  position array and value array in the correct order")
+    #     print("continuing evaluation as if everything were normal")
     #if nHaplotypes == nSites: raise Exception("number of haploptypes and sites are the same. Make sure valArr is a 2D array with haplotypes as rows and marker states as columns")
     res = np.zeros((nHaplotypes,nSites),dtype=np.int8)-1
     
@@ -176,9 +176,9 @@ def laplace_smooth_multiple_haplotypes_parallel(posArr, valArr, scale):
     nHaplotypes = len(valArr)
     nSites = len(posArr)
     
-    if nHaplotypes >= nSites:
-        print("there are more haplotypes than sites in this dataset. check that you have passed the position array and value array in the correct order")
-        print("continuing evaluation as if everything were normal")
+    # if nHaplotypes >= nSites:
+    #     print("there are more haplotypes than sites in this dataset. check that you have passed the position array and value array in the correct order")
+    #     print("continuing evaluation as if everything were normal")
     
     res = np.zeros((nHaplotypes, nSites), dtype=np.int8) - 1
     

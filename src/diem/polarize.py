@@ -306,7 +306,7 @@ def em_worker(lims, MBC_cat_shape, polBC_cat_shape, DIBC_cat_shape, Support_cat_
 # this could be an issue of the parallel overhead outweighing the benefits of more cores
 # on larger data, the speedup should be more pronounced
 def run_em_parallel(
-        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99, nCPUs = None):
+        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99999, nCPUs = None):
     # should sites be specified as 'included' or 'excluded'
     # per-scaffoled stuff, inversions, 
     ''' 
@@ -533,7 +533,7 @@ def run_em_parallel(
 # it may be more memory efficient, as it does not require the shared memory overhead... but need to check this
 # if user requests only one core from the diplotype.polarize function (the default value), this function is used 
 def run_em_linear(
-        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99):
+        initMBC, initPolBC, ploidyBC,sitesExcludedByChr = None,individualsExcluded = None, maxItt =500, epsilon = 0.99999):
     
     ''' Run the EM algorithm in serial to Polarize the genome.
 
