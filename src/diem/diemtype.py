@@ -200,11 +200,11 @@ class DiemType:
             print(f"Warning: The following chromosomes in the exclusions file were not found in the dataset and were skipped: {sorted(skipped_chromosomes)}")
         
 
-    def computeHIs(self):
+    def computeHIs(self,force=False):
         """
         Compute heterozygosity indices for each individual.
         """
-        if self.PolByChr is None:
+        if self.PolByChr is None and force==False:
             print("data must be polarized before computing HIs. Resorting will be done automatically after polarizing, thresholding, or smoothing.")
             return None    
         else:
