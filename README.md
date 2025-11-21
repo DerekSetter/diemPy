@@ -27,7 +27,7 @@ A Python package for genome polarization and subsequent analyses using the `diem
 
 ## Documentation
 
-📚 **[Full Documentation](https://your-jupyter-book-url)**
+📚 **[Full Documentation](https://diempy.readthedocs.io/en/latest/intro.html)**
 
 The comprehensive documentation includes:
 - [Installation Guide](docs/installation.md)
