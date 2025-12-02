@@ -40,7 +40,21 @@ bounds5 = [-1.5,-.5,.5,1.5,2.5,3.5]
 Some utility functions for working with the data and results
 '''
 
-def plot_painting(diemMatrix):
+# def plot_painting(diemMatrix):
+#     '''
+#      Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.'''
+#     # for a single chromosome in the 'stateMatrixByChromsome'
+#     mycmap = colors.ListedColormap( diemColors4)
+#     bounds = [-.5,.5,1.5,2.5,3.5]
+#     norm = colors.BoundaryNorm(bounds,mycmap.N)
+    
+#     fig, ax = plt.subplots(figsize=(16,4))
+#     ax.pcolormesh(diemMatrix, cmap = mycmap, norm=norm)
+#     ax.set_yticks([])
+#     ax.set_yticklabels([])
+#     plt.show()
+
+def plot_painting(diemMatrix,names=None):
     '''
      Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.'''
     # for a single chromosome in the 'stateMatrixByChromsome'
@@ -50,9 +64,17 @@ def plot_painting(diemMatrix):
     
     fig, ax = plt.subplots(figsize=(16,4))
     ax.pcolormesh(diemMatrix, cmap = mycmap, norm=norm)
-    ax.set_yticks([])
-    ax.set_yticklabels([])
+    
+    if names is not None:
+        # Set y-tick positions at the center of each row
+        ax.set_yticks(np.arange(len(names)) + 0.5)
+        ax.set_yticklabels(names)
+    else:
+        ax.set_yticks([])
+        ax.set_yticklabels([])
+    
     plt.show()
+
 
 def plot_painting_with_positions(diemMatrix, positions,markerWidth=25):
     '''
