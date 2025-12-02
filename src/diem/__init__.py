@@ -25,6 +25,7 @@ from . import smooth
 from . import tests
 from . import utils
 from . import io
+from . import plots
 
 # Import key functions for direct access
 # I/O functions
