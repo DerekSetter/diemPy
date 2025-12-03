@@ -64,7 +64,16 @@ def hapStateIndices_to_hapMatrix(hapIndices):
     Marr[rows, cols, states] += 1
     return Marr
 
-
+def initialize_given_polarity(M_, initPolarity):
+    '''
+    Initialize the polarity of the M array to the given initPolarity.
+    Flips the states for indices where initPolarity is 1.
+    '''
+    M = M_.copy()
+    flip_idx = np.where(initPolarity == 1)[0]
+    for idx in flip_idx:
+        M[idx][:] = M[idx][:,[0,3,2,1]]
+    return M
 
 def initialize_test_polarity(M_):
     '''

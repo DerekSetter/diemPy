@@ -199,6 +199,32 @@ class DiemType:
         if skipped_chromosomes:
             print(f"Warning: The following chromosomes in the exclusions file were not found in the dataset and were skipped: {sorted(skipped_chromosomes)}")
         
+    def add_initial_polarity(self,filePath):
+
+        df = pd.read_csv(filePath,header=0,sep='\t')
+    
+        listed_names = np.unique(df['chromosome'].values.tolist())
+        if set(listed_names) != set(self.chrNames):
+            print("the chromosome names in the polarity file do not match those in the DiemType instance")
+            return None
+        
+        for idx,chrName in enumerate(self.chrNames):
+            
+            inputPositions = df.loc[df['chromosome'] == chrName,'position'].values
+            inputPositions = np.array(inputPositions,dtype=np.int32)
+
+            if not np.array_equal(inputPositions,np.array(self.posByChr[idx])):
+                print("the positions for chromosome ",chrName," in the polarity file do not match those in the DiemType instance")
+                return None
+
+
+            thisChrPolarity = df.loc[df['chromosome'] == chrName,'polarity'].values
+            thisChrPolarity = np.array(thisChrPolarity,dtype=np.int8)
+            if self.initialPolByChr is None:
+                self.initialPolByChr = [None]*len(self.chrNames)
+            self.initialPolByChr[idx] = thisChrPolarity
+
+           
 
     def computeHIs(self,force=False):
         """
@@ -359,7 +385,12 @@ class DiemType:
         initMBC = [pol.stateMatrix_to_MArray(x) for x in self.DMBC]
         initPolBC = []
 
-        if boolTestData == True:
+        if self.initialPolByChr is not None:
+            print("using the provided initial polarity")
+            initPolBC = self.initialPolByChr
+            for idx, M in enumerate(initMBC):
+                initMBC[idx] = pol.initialize_given_polarity(M,initPolBC[idx])
+        elif boolTestData == True:
             print("initializing test polarity")
             for idx,M in enumerate(initMBC):
                 thisPol,thisM = pol.initialize_test_polarity(M)
