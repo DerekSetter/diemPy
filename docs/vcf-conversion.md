@@ -28,4 +28,8 @@ i2      2          2
 i3      2          2
 ```
 
-There is a built-in function of diempy to run at the start of the workflow (see workflow example notebook for details) that will update the meta data file. This should be done before the polarization and subsequent analysis. 
+There is a built-in function of diempy to run at the start of the workflow (see workflow example notebook for details) that will update the meta data file. This should be done *before loading the raw data into diemPy*. 
+
+```python
+diem.update_ploidy('ploidyFile.txt','meta_raw.bed','meta_corrected.bed')
+dRaw = diem.read_diem_bed('input.bed','meta_corrected.bed')
