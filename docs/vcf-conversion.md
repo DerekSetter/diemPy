@@ -21,6 +21,7 @@ To correct this the user may provide a file with the first column header #Ind, a
 
 Each subsequent column should have a chromosome name at the top, with the corresponding ploidy for each individual below. For example:
 
+```text
 #Ind    chrName1  chrName2
 i1      1          1
 i2      2          2

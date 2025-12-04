@@ -4,7 +4,7 @@
 
 **We strongly recommend using jupyter notebook in the example_workflow directory of diemPy to get started**
 
-**Please the 'example_workflow' directory to a personal folder and run it there**
+**Please COPY the 'example_workflow' directory to a personal folder and run it there**
 
 
 In a terminal
@@ -41,13 +41,13 @@ d_polarized = d.polarize(ncores=4, maxItt=500)
 write_polarized_bed('input.bed','output.bed',d_polarized)
 
 # Apply threshold filtering
-d_filtered = d_polarized.apply_threshold(threshold=0.5)
+d_filtered = d_polarized.apply_threshold(threshold=-10)
 
 # Sort the filtered data by hybrid index
 d_filtered.sort()
 
 # Smooth the data
-d_smooth = d_filtered.smooth(scale=0.1)
+d_smooth = d_filtered.smooth(scale=0.0001)
 
 # Create contig matrix
 d_smooth.create_contig_matrix()
