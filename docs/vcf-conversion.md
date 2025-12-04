@@ -26,5 +26,6 @@ Each subsequent column should have a chromosome name at the top, with the corres
 i1      1          1
 i2      2          2
 i3      2          2
+```
 
 There is a built-in function of diempy to run at the start of the workflow (see workflow example notebook for details) that will update the meta data file. This should be done before the polarization and subsequent analysis. 
