@@ -195,6 +195,11 @@ class DiemType:
                 indices = np.where((self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end))[0]
                 self.siteExclusionsByChr[chrIdx] = self.siteExclusionsByChr[chrIdx] + indices.tolist()
         
+        # Sort and deduplicate all chromosome exclusions
+        for chrIdx in range(len(self.siteExclusionsByChr)):
+            if self.siteExclusionsByChr[chrIdx] is not None:
+                self.siteExclusionsByChr[chrIdx] = sorted(list(set(self.siteExclusionsByChr[chrIdx])))
+
         # Report any skipped chromosomes
         if skipped_chromosomes:
             print(f"Warning: The following chromosomes in the exclusions file were not found in the dataset and were skipped: {sorted(skipped_chromosomes)}")
