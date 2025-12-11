@@ -227,24 +227,59 @@ def update_ploidy(ploidyFilePath, metaFilePathIn, metaFilePathOut):
     
     # Read metadata
     df_meta = pd.read_csv(metaFilePathIn, sep='\t')
+
+    # Initialize tracking sets
+    chromosomes_not_in_meta = set()
+    individuals_not_in_meta = set()
+    individuals_not_in_ploidy = set()
+    
+    # Get sets for comparison
+    meta_chromosomes = set(df_meta['#Chrom'])
+    meta_individuals = set(df_meta.columns[6:])
+    ploidy_individuals = set(df_ploidy[individual_col])
+    ploidy_chromosomes = set(df_ploidy.columns[1:])
+
+    # Check for individuals not in ploidy file
+    individuals_not_in_ploidy = meta_individuals - ploidy_individuals
+    individuals_not_in_meta = ploidy_individuals - meta_individuals
+
     
     # For each chromosome column in the ploidy file (except the individual names column)
     for chrom_col in df_ploidy.columns[1:]:
+
+        if chrom_col not in meta_chromosomes:
+            chromosomes_not_in_meta.add(chrom_col)
+            continue
+
         # Create ploidy dictionary for this chromosome
         ploidy_dict = dict(zip(df_ploidy[individual_col], df_ploidy[chrom_col]))
         
         # Find the row for this chromosome in metadata
         target_row_mask = df_meta['#Chrom'] == chrom_col
         
-        if target_row_mask.any():
-            # Update ploidy for each individual
-            for individual in df_meta.columns[6:]:
-                if individual in ploidy_dict:
-                    df_meta.loc[target_row_mask, individual] = ploidy_dict[individual]
-            print(f"Updated ploidy for {chrom_col}")
-        else:
-            print(f"Warning: {chrom_col} not found in metadata file")
-    
+        # Update ploidy for each individual
+        for individual in df_meta.columns[6:]:
+            if individual in ploidy_dict:
+                df_meta.loc[target_row_mask, individual] = ploidy_dict[individual]
+            # Note: individuals not in ploidy file are already tracked above
+        
+        print(f"Updated ploidy for {chrom_col}")
+
+    # Report any issues found
+    if chromosomes_not_in_meta:
+        print(f"\nWarning: The following chromosomes from the ploidy file were not found in the metadata file: {sorted(chromosomes_not_in_meta)}")
+        print("No ploidy updates were made for these chromosomes")
+    if individuals_not_in_meta:
+        print(f"\nWarning: The following individuals from the ploidy file were not found in the metadata file: {sorted(individuals_not_in_meta)}")
+        print("No ploidy updates were made for these individuals")
+    if individuals_not_in_ploidy:
+        print(f"\nWarning: The following individuals from the metadata file were not found in the ploidy file: {sorted(individuals_not_in_ploidy)}")
+        print("The ploidy for these individuals remains unchanged")
+    # Summary
+    if not (chromosomes_not_in_meta or individuals_not_in_meta or individuals_not_in_ploidy):
+        print("\nAll chromosomes and individuals matched successfully.")
+    else:
+        print("\nPloidy update completed with warnings as noted above. Please review your data before proceeding!!!")
     # Write updated metadata to output file
     df_meta.to_csv(metaFilePathOut, sep='\t', index=False)
     print(f"Updated metadata saved to {metaFilePathOut}")
