@@ -54,15 +54,18 @@ Some utility functions for working with the data and results
 #     ax.set_yticklabels([])
 #     plt.show()
 
-def plot_painting(diemMatrix,names=None):
+def plot_painting(diemMatrix,names=None,thisFigSize = None):
     '''
      Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.'''
     # for a single chromosome in the 'stateMatrixByChromsome'
+
+    if thisFigSize is None:
+        thisFigSize = (16,4)
     mycmap = colors.ListedColormap( diemColors4)
     bounds = [-.5,.5,1.5,2.5,3.5]
     norm = colors.BoundaryNorm(bounds,mycmap.N)
     
-    fig, ax = plt.subplots(figsize=(16,4))
+    fig, ax = plt.subplots(figsize=thisFigSize)
     ax.pcolormesh(diemMatrix, cmap = mycmap, norm=norm)
     
     if names is not None:
@@ -76,7 +79,7 @@ def plot_painting(diemMatrix,names=None):
     plt.show()
 
 
-def plot_painting_with_positions(diemMatrix, positions,markerWidth=25):
+def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,thisFigSize = None):
     '''
     Plot a painting of a diemMatrix with proper spacing based on physical positions,
     showing blank spaces between markers.
@@ -87,11 +90,14 @@ def plot_painting_with_positions(diemMatrix, positions,markerWidth=25):
         markerWidth: Half-width of each marker's visual representation (in base pairs)
     '''
     # for a single chromosome in the 'stateMatrixByChromsome'
+
+    if thisFigSize is None:
+        thisFigSize = (16,4)
     mycmap = colors.ListedColormap(diemColors4)
     bounds = [-.5,.5,1.5,2.5,3.5]
     norm = colors.BoundaryNorm(bounds,mycmap.N)
     
-    fig, ax = plt.subplots(figsize=(16,4))
+    fig, ax = plt.subplots(figsize=thisFigSize)
     
     # Each marker gets a narrow bin (2 bp wide: 1 bp left and right of position)
     # Gaps between markers will show as blank space
@@ -125,7 +131,7 @@ def plot_painting_with_positions(diemMatrix, positions,markerWidth=25):
     
     ax.set_yticks([])
     ax.set_yticklabels([])
-    ax.set_xlabel('Physical Position (bp)')
+    ax.set_xlabel('Position')
     
     # Set x-axis limits to show the full range
     ax.set_xlim(positions[0] - (positions[-1] - positions[0]) * 0.05, 

@@ -274,7 +274,7 @@ def update_ploidy(ploidyFilePath, metaFilePathIn, metaFilePathOut):
         print("No ploidy updates were made for these individuals")
     if individuals_not_in_ploidy:
         print(f"\nWarning: The following individuals from the metadata file were not found in the ploidy file: {sorted(individuals_not_in_ploidy)}")
-        print("The ploidy for these individuals remains unchanged")
+        print("The ploidy for these individuals remains diploid for all chromosomes (the default value)")
     # Summary
     if not (chromosomes_not_in_meta or individuals_not_in_meta or individuals_not_in_ploidy):
         print("\nAll chromosomes and individuals matched successfully.")
