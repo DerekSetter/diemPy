@@ -202,7 +202,7 @@ class DiemType:
 
     def computeHIs(self,force=False):
         """
-        Compute heterozygosity indices for each individual.
+        Compute hybrid indices for each individual.
         """
         if self.PolByChr is None and force==False:
             print("data must be polarized before computing HIs. Resorting will be done automatically after polarizing, thresholding, or smoothing.")
@@ -363,6 +363,7 @@ class DiemType:
             print("initializing test polarity")
             for idx,M in enumerate(initMBC):
                 thisPol,thisM = pol.initialize_test_polarity(M)
+ #               print("SJEB initialized test polarity for chromosome",idx)
                 initMBC[idx] = thisM
                 initPolBC.append(thisPol)
         else:
