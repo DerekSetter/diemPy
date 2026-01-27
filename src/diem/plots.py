@@ -24,13 +24,14 @@ from scipy.interpolate import interp1d
 
 
 # ---- diem internals ----
-from . import polarize as pol
+#from . import polarize as pol
 from . import smooth
 from . import contigs as ct
 
 
 # explicitly used smoothing entry point
 from .smooth import laplace_smooth_multiple_haplotypes
+from fractions import Fraction
 
 
 
