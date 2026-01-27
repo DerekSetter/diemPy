@@ -46,7 +46,17 @@ from fractions import Fraction
 #import numpy as np
 
 
-def Split(seq, same_test=lambda a, b: a == b): # code credit ChatGPT 5.2 (asked for Mca equiv)
+def Split(seq, same_test=lambda a, b: a == b):
+    '''
+    Function to split a sequence into sublists based on a test function.
+    ChatGPT 5.2 provided Mathematica Split equivalent in Python.
+    
+    Args:
+        seq (list): The input sequence to be split.
+        same_test (function): A function that takes two arguments and returns True if they are considered the same.
+    Returns:
+        list: A list of sublists, where each sublist contains consecutive elements that are considered the same.
+    '''
     if not seq:
         return []
     out = [[seq[0]]]
@@ -55,12 +65,15 @@ def Split(seq, same_test=lambda a, b: a == b): # code credit ChatGPT 5.2 (asked 
     return out
 
 
-def SplitBy(lst, test):  # code credit: BPL @ StackOverflow
-    return Split(lst, lambda x, y: test(x) == test(y))
-
-
-
 def RichRLE(lst):
+    """
+    Function generating a Rich Run Length Encoding of a list.
+    
+    Args:
+        lst (list): The input list to be encoded.
+    Returns:
+        lists: A list containing four lists: states, lengths, starts, and ends of each run.
+    """
     slst = Split(lst, lambda x, y: y == x)
     cumstart = 0
     states = []
@@ -78,27 +91,33 @@ def RichRLE(lst):
 
 
 def Map(f, lst): return list(map(f, lst))
+#""" equivalent to Mathematica Map """
 
 
 def ParallelMap(f, lst):
+#""" equivalent to Mathematica ParallelMap """
     pool = mp.Pool()
     return list(pool.map(f, lst))
 
 
 def Flatten(lstOlists): return list(chain.from_iterable(lstOlists)) #itertools
+#""" equivalent to Mathematica Flatten """
 
 
 def StringJoin(slst):
+#""" equivalent to Mathematica StringJoin """
     separator = ''
     return separator.join(slst)
 
 
 def Transpose(mat): return list(np.array(mat).T)  # care here - hidden type casting on heterogeneous 'mat'rices
+#""" equivalent to Mathematica Transpose """
 
 def StringTranspose(slst): return Map(StringJoin, Transpose(Map(Characters, slst)))
-
+#""" equivalent to Mathematica StringTranspose """
 
 def Tally(lst):  # single pass so in principle fast ( O(n) ) but answers unsorted
+    """ equivalent to Mathematica Tally """
     states = []
     tally = []
     for x in lst:
@@ -111,13 +130,16 @@ def Tally(lst):  # single pass so in principle fast ( O(n) ) but answers unsorte
     return tally
 
 def Second(lst): return lst[1]
+ #   """ equivalent to Mathematica Second """
 
 def Total(lst): return sum(lst)
+#   """ equivalent to Mathematica Total """
 
 def Join(lst1, lst2): return lst1 + lst2
-
+#   """ equivalent to Mathematica Join """
 
 def Take(lst, n):
+    """ equivalent to Mathematica Take """
     if n > 0:
         ans = lst[:n]
     elif n == 0:
@@ -128,6 +150,7 @@ def Take(lst, n):
 
 
 def Drop(lst, n):
+    """ equivalent to Mathematica Drop """
     if n > 0:
         ans = lst[n:]
     elif n == 0:
@@ -137,6 +160,7 @@ def Drop(lst, n):
     return ans
 
 def FirstPosition(lst, elem):
+    """ equivalent to Mathematica FirstPosition """
     i = -1
     pos = []
     for l in lst:
@@ -147,8 +171,10 @@ def FirstPosition(lst, elem):
     return pos
 
 def Characters(s): return [*s]
+#""" equivalent to Mathematica Characters """
 
 def StringTakeList(string, lengths):
+    """ equivalent to Mathematica StringTakeList """
     substrings = []
     current_index = 0
     for length in lengths:
@@ -170,6 +196,7 @@ def StringTakeList(string, lengths):
 
 
 StringReplace20_dict = str.maketrans('02', '20')
+""" simultaneous 2<->0 replacement dictionary """
 
 def StringReplace20(text):
     """will _!simultaneously!_ replace 2->0 and 0->2"""
@@ -177,6 +204,11 @@ def StringReplace20(text):
 
 
 def sStateCount(s):
+    """ 
+    counts diem States as chars
+    Args:   astring
+    Returns: list of counts [nU,n0,n1,n2]
+    """
     counts = Map(Second, Tally(Join(["0", "1", "2"], Characters(s))))
     nU = Total(
         Drop(counts, 3)
@@ -185,16 +217,12 @@ def sStateCount(s):
     return Join([nU], counts)
 
 
-def csStateCount(cs):
-    """
-    This function counts diem chars; input cs is char list or string; output is an np.array
-    """
-    ans = Counter("_012")
-    ans.update(cs)
-    return np.array(list(ans.values())) - 1
-
-
 def pHetErrOnString(s):
+    """
+    Calculates state frequency,heterozygosity and error rate from a string of diem states.
+    Args:   astring
+    Returns: tuple of (pHetErr, pHet, pErr)
+    """
     sCount = sStateCount(s)
     callTotal = Total(Drop(sCount, 1))
     if callTotal > 0:
@@ -217,79 +245,38 @@ def pHetErrOnString(s):
 
 """ stuff from Nina's other files ENDING """
 """ new support by SJEB STARTING"""
-"""
-def genomes_summary_given_DI(aDT, DIthreshold: float):
-    #Summarise genomes of each individual. Modelled on diemType:compute_HIs
 
-
-    # modified from A4_from_stateMatrix(SM,ploidies) in Derek's diem polarization code, copied for use here
-    # here, SM (State Matrix) is equivalent to DM (Diem Matrix) as it is now called
-    def DIfiltered_A4_from_stateMatrix(SM,ploidies,DIfilter):
-        I4 = np.zeros((len(SM),4))
-        for idx,individual in enumerate(SM):
-            numZeros = np.count_nonzero(individual[DIfilter]==0)
-            numOnes = np.count_nonzero(individual[DIfilter]==1)
-            numTwos = np.count_nonzero(individual[DIfilter]==2)
-            numThrees = np.count_nonzero(individual[DIfilter]==3)
-            I4[idx][:] = np.array([numZeros,numOnes,numTwos,numThrees])
-        A4 = np.dot(np.diag(ploidies),I4)
-        return A4
-
-    # modified from get_hybrid_index(A4) in Derek's diem polarization code, copied for use here
-    def get_frequencies(A4):
-        #A4 is the matrix of (nHaps x states) with entries being the ploidy-adjusted counts
-        nInds = len(A4)
-        HIarr = np.zeros(nInds)
-        HOM1arr = np.zeros(nInds)
-        HETarr = np.zeros(nInds)
-        HOM2arr = np.zeros(nInds)
-        Uarr = np.zeros(nInds)
-        for idx,counts in enumerate(A4):
-            hiNum = counts[1]*0 + counts[2]*1 + counts[3]*2
-            stateDenom = counts[1] + counts[2] + counts[3] + counts[0]
-            dipDenom = counts[1] + counts[2] + counts[3]
-            hapDenom = 2*dipDenom
-            hi = hiNum/hapDenom
-            HIarr[idx] = hi
-            HOM1arr[idx] = counts[1]/dipDenom
-            HETarr[idx] = counts[2]/dipDenom
-            HOM2arr[idx] = counts[3]/dipDenom
-            Uarr[idx] = counts[0]/stateDenom
-        return [HIarr,HOM1arr,HETarr,HOM2arr,Uarr]
-    
-    A4List = []
-    RetainedNumer = []
-    RetainedDenom = []
-    for idx, chr in enumerate(aDT.DMBC):
-        ploidies = aDT.chrPloidies[idx]
-        
-        DIfilter = aDT.DIByChr[idx]>=DIthreshold
-        RetainedNumer.append(sum(DIfilter))
-        RetainedDenom.append(len(DIfilter))
- 
-        A4 = DIfiltered_A4_from_stateMatrix(chr, ploidies, DIfilter)
-        A4List.append(A4)
-
-    A4Total = np.sum(A4List, axis=0)
-    summaries = get_frequencies(A4Total)
-
-    return [summaries,sum(RetainedNumer),sum(RetainedDenom)]
-"""
+def Chr_Nickname(chr_name):
+    """
+    Shorten chromosome names for plotting.
+    E.g., 'chromosome_1' -> 'Chr 1'
+    Args:
+        chr_name (str): Full chromosome name.
+    Returns:
+        str: Shortened chromosome name.
+    """
+    if 'scaffold' in chr_name:
+        return chr_name.replace('scaffold_', 'Scaf ')
+    elif 'chromosome' in chr_name:
+        return chr_name.replace('chromosome_', 'Chr ')
+    else:
+        return chr_name[-6:]
 
 def read_diem_bed_4_plots(bed_file_path, meta_file_path):
     """
-    This is completely ripped from Derek's read_diem_bed!!!
-    It returns a pandas dataframe of the bed_file, POLARISED (if hasPolarity)
-
+    Reads a diem BED file and meta file for use in plots.py
+    code copy from Derek Setter's read_diem_bed with additions by SJEB
+    
     Derek comments:
     Fast version of read_diem_bed with significant performance improvements.
     
-    Parameters:
+    Args:
     bed_file_path (str): Path to the diem BED file.
     meta_file_path (str): Path to the diem metadata file.
 
     Returns:
-    DiemType: DiemType object containing the diem BED data.
+    A tuple of a DiemType object containing the diem BED data 
+    (POLARISED (if hasPolarity)) and an IndsName file.
     """
     
     # Read metadata - no changes needed here as it's already fast
@@ -354,7 +341,15 @@ def read_diem_bed_4_plots(bed_file_path, meta_file_path):
 # ChatGPT 5.2 speed optimised version
 def genomes_summary_given_DI(aDT, DIthreshold: float):
     """
-    Vectorized, faster version.
+    Summarises a diemType.DMBC across chromosomes, applying a DI threshold filter.
+
+    Args:
+    aDT: a DiemType
+    DIthreshold: DI threshold filter
+    Returns:
+    summaries: list of per-individual summary arrays [HI, HOM1, HET, HOM2, U]
+    RetainedNumer: number of retained sites after DI filtering
+    RetainedDenom: total number of sites before DI filtering
     """
 
     nInds = aDT.DMBC[0].shape[0]
@@ -408,8 +403,18 @@ def genomes_summary_given_DI(aDT, DIthreshold: float):
 def genomes_summary_given_DI_by_chromosome(aDT, DIthreshold, chrom_idx):
     """
     Per-chromosome version of genomes_summary_given_DI.
-    Returns per-individual summaries for ONE chromosome.
+    Summarises a diemType.DMBC for a chromosomes, applying a DI threshold filter.
+
+    Args:
+    aDT: a DiemType
+    DIthreshold: DI threshold filter
+    chrom_idx: index of chromosome to process
+    Returns:
+    summaries: list of per-individual summary arrays [HI, HOM1, HET, HOM2, U]
+    RetainedNumer: number of retained sites after DI filtering
+    RetainedDenom: total number of sites before DI filtering
     """
+
 
     SM = aDT.DMBC[chrom_idx]
     ploidies = aDT.chrPloidies[chrom_idx]
@@ -466,8 +471,18 @@ from bisect import bisect_left
 
 def fractional_positions_of_multiples(A, delta):
     """
-    New, general. ticks solution. SJEB 27/01/2026
+    Calculate fractional positions of multiples of delta in a sorted array A.
+
+    Used as an inverse linear interpolation from reference (physical) positions to site indices;
+    for example, to place ticks at regular physical intervals on a plot of site indices.
+
+    Args:
+        A (array-like): Sorted array of values.
+        delta (float): The interval for multiples.
+    Returns:
+        np.ndarray: Array of (value, position) pairs.
     """
+
     A = np.asarray(A)
     n = len(A)
 
@@ -498,107 +513,11 @@ def fractional_positions_of_multiples(A, delta):
     return np.column_stack((tick_values, tick_positions))
 """ new support by SJEB ENDING"""
 
-"""# Polarise and Join
-def polarise_n_join(polarisation_data, s_data):
-    modified_data = []
-    for i in range(len(polarisation_data)):
-        polarisation_array = polarisation_data[i]
-        s_column = np.array(s_data[i])[:, np.newaxis]
-        new_array = np.hstack((polarisation_array, s_column))
-        for row in new_array:
-            if float(row[0]) ==2:
-                row[-1] = StringReplace20(row[-1])
-            else:
-                row[-1] = row[-1]
-        modified_data.append(new_array)
-    return modified_data
 
 
 
-
-# MB to ticks:
-def chr_mb_ticks(sgl, offset=0, delta=10**6):
-    if isinstance(sgl[0], tuple):
-        Mb = [x[1] for x in sgl]
-    else:
-        Mb = sgl
-        Mb = Mb.astype(int)
-    sites = offset + np.arange(1, len(sgl) + 1)
-    Mbticks = np.arange(np.ceil(min(Mb) / delta), np.floor(max(Mb) / delta) + 1)
-    Mb_sites_pairs = np.column_stack((Mb, sites))
-    Mb_sites_pairs = Mb_sites_pairs[np.lexsort((Mb_sites_pairs[:, 1],))]
-    interp_func = interp1d(Mb_sites_pairs[:, 0], Mb_sites_pairs[:, 1], kind='linear', bounds_error=False, fill_value="extrapolate")
-    tick_positions = np.round(interp_func(Mbticks * delta)).astype(int)
-    tick_values = Mbticks * delta / 10**6
-    return np.column_stack((tick_values, tick_positions))
-
-
-def mb_ticks(gl, delta=10**6):
-    chrgl = [list(group) for _, group in pd.groupby(gl, key=lambda x: x[0])]
-    lengths = [len(c) for c in chrgl]
-    offsets = np.concatenate(([0], np.cumsum(lengths)[:-1]))
-    ticks = [chr_mb_ticks(chrgl[i], offset=offsets[i], delta=delta) for i in range(len(chrgl))]
-    return ticks
-
-
-def mb1_ticks(gl):
-    return mb_ticks(gl, delta=10**6)
-
-def mb2_ticks(gl):
-    return mb_ticks(gl, delta=2 * 10**6)
-
-
-def chr_kb_ticks(sgl, offset=0, delta=10**5):
-    if isinstance(sgl[0], tuple):
-        Kb = [x[1] for x in sgl]
-        Kb = np.array(Kb).astype(float).astype(int)
-    else:
-        Kb = sgl
-        Kb = np.array(Kb).astype(float).astype(int)
-    sites = offset + np.arange(1, len(sgl) + 1)
-    Kbticks = np.arange(np.ceil(min(Kb) / delta), np.floor(max(Kb) / delta) + 1)
-    Kb_sites_pairs = np.column_stack((Kb, sites))
-    Kb_sites_pairs = Kb_sites_pairs[np.lexsort((Kb_sites_pairs[:, 1],))]
-    interp_func = interp1d(
-        Kb_sites_pairs[:, 0], Kb_sites_pairs[:, 1],
-        kind='linear', bounds_error=False, fill_value="extrapolate"
-    )
-    tick_positions = np.round(interp_func(Kbticks * delta)).astype(int)
-    tick_values = Kbticks * delta / 10 ** 3  # Convert to kilobases (kb)
-
-    return np.column_stack((tick_values, tick_positions))
-
-
-def kb_ticks(gl, delta=10 ** 3):
-    chrgl = [list(group) for _, group in pd.groupby(gl, key=lambda x: x[0])]
-    lengths = [len(c) for c in chrgl]
-    offsets = np.concatenate(([0], np.cumsum(lengths)[:-1]))
-    ticks = [chr_kb_ticks(chrgl[i], offset=offsets[i], delta=delta) for i in range(len(chrgl))]
-    return ticks
-
-
-def kb1_ticks(gl):
-    return kb_ticks(gl, delta=10 ** 3)
-
-
-def kb2_ticks(gl):
-    return kb_ticks(gl, delta=2 * 10 ** 3)
-
-
-
-# AnnotatedHITally
-def AnnotatedHITally(markers):
-    string_counts = Counter(markers)
-    sorted_counts = sorted(string_counts.items(), key=lambda x: x[1], reverse=True)
-    df = pd.DataFrame(sorted_counts, columns=["Type", "N"])
-    total_strings = len(markers)
-    df["p"] = df["N"] / total_strings
-    df["cum(p)"] = df["p"].cumsum()
-    return df
-"""
-
-# DiemPlotPrep Class
 class DiemPlotPrep:
+    """ Class Prepare DIEM data for plotting """
     def __init__(self, plot_theme, ind_ids, polarised_data, di_threshold, di_column, diemStringPyCol, phys_res, ticks=None, smooth=None):
         self.polarised_data = polarised_data
         self.di_threshold = di_threshold
@@ -1947,7 +1866,8 @@ class GenomicContributions:
 
         for i, chr_DM in enumerate(self.dPol.DMBC):
             chr_name = self.dPol.chrNames[i]
-            chr_name = chr_name.replace("chromosome_", "Chr ") # Nickname Chromosomes
+            #chr_name = chr_name.replace("chromosome_", "Chr ") # Nickname Chromosomes
+            chr_name = Chr_Nickname(chr_name)  # Use Nickname function
             DIvals = self.dPol.DIByChr[i]
 
             mask = DIvals >= DIval
@@ -2565,7 +2485,8 @@ def diemIrisPlot(
     if length_of_chromosomes is not None:
         for chrom, (start, end, _) in length_of_chromosomes.items():
             chrom_ranges.append(
-                (chrom.replace("chromosome_", "Chr "), start, end)
+                #(chrom.replace("chromosome_", "Chr "), start, end)# Nickname Chromosomes
+                (Chr_Nickname(chrom), start, end)# Use Nickname function
             )
 
     # -------------------------------------------------
