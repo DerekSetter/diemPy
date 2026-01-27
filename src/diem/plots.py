@@ -31,7 +31,7 @@ from . import contigs as ct
 
 # explicitly used smoothing entry point
 from .smooth import laplace_smooth_multiple_haplotypes
-
+from fractions import Fraction
 
 
 """ stuff from Nina's other files STARTING """
@@ -2233,7 +2233,7 @@ class DiemPlotPrep:
         for scaffold, haplos in scaffold_haplotypes.items():
             haplo_matrix = np.vstack(haplos)
     
-            smoothed = diem.smooth.laplace_smooth_multiple_haplotypes(
+            smoothed = smooth.laplace_smooth_multiple_haplotypes(
                 scaffold_arrays[scaffold],
                 haplo_matrix,
                 scale
