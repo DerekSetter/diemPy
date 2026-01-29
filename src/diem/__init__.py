@@ -57,3 +57,17 @@ from .utils import count_site_differences
 
 # Make DiemType class directly accessible
 from .diemtype import DiemType
+
+# Make plots classes directly accessible
+
+from .plots import GenomeSummaryPlot
+from .plots import GenomeMultiSummaryPlot
+from .plots import GenomicDeFinettiPlot
+from .plots import GenomicMultiDeFinettiPlot
+from .plots import GenomicContributionsPlot
+
+from .plots import diemPairsPlot
+
+from .plots import diemPlotPrepFromBedMeta
+from .plots import diemIrisFromPlotPrep
+from .plots import diemLongFromPlotPrep
