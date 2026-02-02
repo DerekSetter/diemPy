@@ -149,6 +149,7 @@ class DiemType:
 
         self.siteExclusionsByChr = exclusionsByChr
         self.indExclusions = indExclusions
+        self.relativeRecRateDict = None
         #self.idealMarker = None
         #self.barrierBreakIdx = None
 
@@ -229,8 +230,35 @@ class DiemType:
                 self.initialPolByChr = [None]*len(self.chrNames)
             self.initialPolByChr[idx] = thisChrPolarity
 
-           
+    def add_relative_recombination_rates(self,filePath):
+        '''
+        Adds relative recombination rates from a file to the DiemType instance.
 
+        :param self: DiemType instance  
+        :param filePath: str, path to the relative recombination rate file
+
+        :return: None
+
+        '''
+
+        df = pd.read_csv(filePath,header=0,sep='\t')
+        # assumes headers are 'chromosome' and 'relative_rate'
+        #initially set all chromsomes to have relative rate of 1.0
+        for chrName in self.chrNames:
+            if self.relativeRecRateDict is None:
+                self.relativeRecRateDict = {}
+            self.relativeRecRateDict[chrName] = 1.0
+
+        # update any chromosomes with specified rates (relative to 1.0)
+
+        for idx, row in df.iterrows():
+            chrName = row['chromosome']
+            rate = row['relative_rate']
+            if chrName in self.relativeRecRateDict:
+                self.relativeRecRateDict[chrName] = rate
+            else:
+                print("warning: chromosome ",chrName," in relative recombination rate file not found in DiemType instance. skipping this entry.")
+           
     def computeHIs(self,force=False):
         """
         Compute hybrid indices for each individual.
@@ -508,10 +536,16 @@ class DiemType:
             print("using serial smoothing")
             
         for idx in range(len(a.DMBC)):
+            thisScale = scale
+            if self.relativeRecRateDict is not None:
+                chrName = a.chrNames[idx]
+                if chrName in self.relativeRecRateDict:
+                    thisScale = thisScale / self.relativeRecRateDict[chrName] #divide by relative rate to adjust smoothing scale
+                    # print("adjusted smoothing scale for chromosome ",chrName," to ",scale)
             if parallel == False:
-                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],scale)
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],thisScale)
             else:
-                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes_parallel(a.MapBC[idx],a.DMBC[idx],scale)
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes_parallel(a.MapBC[idx],a.DMBC[idx],thisScale)
 
             a.DMBC[idx] = thisStateMatSmoothed
         if reSort == False:

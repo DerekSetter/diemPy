@@ -87,6 +87,7 @@ def compare_DiemTypes(dTest,dSolution):
             testPassed = False
             AttributesFailedList.append(key)
 
+
     print("Now checking float attributes")
     for key in ['threshold','smoothScale']:
         if check_both_none(dSolution.__dict__[key], dTest.__dict__[key]):
@@ -101,6 +102,33 @@ def compare_DiemTypes(dTest,dSolution):
         # in all other cases, just compare the values
         if dSolution.__dict__[key] != dTest.__dict__[key]:
             print("Attribute ",key," differs")
+            testPassed = False
+            AttributesFailedList.append(key)
+
+    # Compare relativeRecRateDict attribute
+    print("Now checking relativeRecRateDict attribute")
+    key = 'relativeRecRateDict'
+    # Check if both have the attribute
+    has_attr_solution = hasattr(dSolution, key)
+    has_attr_test = hasattr(dTest, key)
+    if not has_attr_solution and not has_attr_test:
+        pass  # Both do not have the attribute, skip
+    elif has_attr_solution != has_attr_test:
+        print(f"Attribute {key} differs (one object has it, the other does not)")
+        testPassed = False
+        AttributesFailedList.append(key)
+    else:
+        # Both have the attribute, compare values
+        val1 = getattr(dSolution, key)
+        val2 = getattr(dTest, key)
+        if check_both_none(val1, val2):
+            pass
+        elif check_differ_none(val1, val2):
+            print(f"Attribute {key} differs (one is None, the other is not)")
+            testPassed = False
+            AttributesFailedList.append(key)
+        elif val1 != val2:
+            print(f"Attribute {key} differs")
             testPassed = False
             AttributesFailedList.append(key)
 
