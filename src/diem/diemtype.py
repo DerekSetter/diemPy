@@ -534,7 +534,9 @@ class DiemType:
             print("using parallel smoothing")
         else:
             print("using serial smoothing")
-            
+
+        if self.relativeRecRateDict is not None:
+            print("adjusting smoothing scale by relative recombination rates for each chromosome")    
         for idx in range(len(a.DMBC)):
             thisScale = scale
             if self.relativeRecRateDict is not None:
