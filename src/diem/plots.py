@@ -35,6 +35,34 @@ from fractions import Fraction
 from bisect import bisect_left
 from joblib import Parallel, delayed # for parallel computation of 'pwdmatrix' pairwise distance matrix rows
 
+"""********************************************************
+Keyword 'DMBCtoucher' is used to label the only four
+points where plots.py touches diemtypes.DMBC states
+
+This is for future-proofing against the day 
+where DMBC is allowed to store states other than {0,1,2,3}
+(c.f. vcf2diem output)
+
+The four (future-proofed = X) points are:
+X   PAR_statewise_genomes_summary_given_DI
+X   SER_statewise_genomes_summary_given_DI
+    pwmatrixFromDiemType
+
+
+plots.py _currently_ has access to extra vcf2diem states through
+    read_diem_bed_4_plots
+    -> diemIrisFromPlotPrep
+    -> diemLongFromPlotPrep
+
+TODO:
+    Chr_Nickname
+    Ind_Nickname   can be linked with meta data to allow eg coloured name plotting (eg showing a-priori clusters)
+
+    Stop using files bypass to get at extra states.
+        Collab with Derek to store extra state internally in DMBC
+
+    Rename the summaries functions more transparently - and move them out into an analytics section
+********************************************************"""
 
 
 """ _____________________ START Mathematica2Python _____________________"""
@@ -374,144 +402,127 @@ def read_diem_bed_4_plots(bed_file_path, meta_file_path):
     # Polarise - these last lines SJEB
                 
     if hasPolarity:
-        print('updating genotype polarities')
+        #print('updating genotype polarities')
         mask = df_bed['polarity'] == 1
         df_bed.loc[mask, 'diem_genotype'] = df_bed.loc[mask, 'diem_genotype'].apply(StringReplace20)
         
-    return df_bed,sampleNames
+    return df_bed,sampleNames,chrLengths
 
-
-def genomes_summary_given_DI(aDT, DIthreshold: float):
-    """
-    Summarises a diemType.DMBC across chromosomes, applying a DI threshold filter.
-    ChatGPT 5.2 speed optimised version.
-
-    Args:
-    aDT: a DiemType
-    DIthreshold: DI threshold filter
-    Returns:
-    summaries: list of per-individual summary arrays [HI, HOM1, HET, HOM2, U]
-    RetainedNumer: number of retained sites after DI filtering
-    RetainedDenom: total number of sites before DI filtering
-    """
-
-    nInds = aDT.DMBC[0].shape[0]
-    A4Total = np.zeros((nInds, 4), dtype=float)
-
-    RetainedNumer = 0
-    RetainedDenom = 0
-
-    for idx, SM in enumerate(aDT.DMBC):
-        ploidies = aDT.chrPloidies[idx]
-        DIfilter = aDT.DIByChr[idx] >= DIthreshold
-
-        RetainedNumer += np.count_nonzero(DIfilter)
-        RetainedDenom += DIfilter.size
-
-        # Apply DI filter once
-        SMf = SM[:, DIfilter]
-
-        # Vectorized state counts
-        I4 = np.stack([
-            np.count_nonzero(SMf == 0, axis=1),
-            np.count_nonzero(SMf == 1, axis=1),
-            np.count_nonzero(SMf == 2, axis=1),
-            np.count_nonzero(SMf == 3, axis=1),
-        ], axis=1)
-
-        # Apply ploidy weights and accumulate
-        A4Total += ploidies[:, None] * I4
-
-    # ---- vectorized frequency computation ----
-
-    counts0 = A4Total[:, 0]
-    counts1 = A4Total[:, 1]
-    counts2 = A4Total[:, 2]
-    counts3 = A4Total[:, 3]
-
-    dipDenom = counts1 + counts2 + counts3
-    hapDenom = 2 * dipDenom
-    stateDenom = dipDenom + counts0
-
-    HI = (counts2 + 2 * counts3) / hapDenom
-    HOM1 = counts1 / dipDenom
-    HET = counts2 / dipDenom
-    HOM2 = counts3 / dipDenom
-    U = counts0 / stateDenom
-
-    summaries = [HI, HOM1, HET, HOM2, U]
-
-    return summaries, RetainedNumer, RetainedDenom
-
-def genomes_summary_given_DI_by_chromosome(aDT, DIthreshold, chrom_idx):
-    """
-    Per-chromosome version of genomes_summary_given_DI.
-    Summarises a diemType.DMBC for a chromosomes, applying a DI threshold filter.
-
-    Args:
-    aDT: a DiemType
-    DIthreshold: DI threshold filter
-    chrom_idx: index of chromosome to process
-    Returns:
-    summaries: list of per-individual summary arrays [HI, HOM1, HET, HOM2, U]
-    RetainedNumer: number of retained sites after DI filtering
-    RetainedDenom: total number of sites before DI filtering
-    """
-
-
-    SM = aDT.DMBC[chrom_idx]
-    ploidies = aDT.chrPloidies[chrom_idx]
-    DIfilter = aDT.DIByChr[chrom_idx] >= DIthreshold
-
-    RetainedNumer = np.count_nonzero(DIfilter)
-    RetainedDenom = DIfilter.size
-
-    # Apply DI filter
-    SMf = SM[:, DIfilter]
-
-    # Vectorized state counts per individual
-    I4 = np.stack([
-        np.count_nonzero(SMf == 0, axis=1),
-        np.count_nonzero(SMf == 1, axis=1),
-        np.count_nonzero(SMf == 2, axis=1),
-        np.count_nonzero(SMf == 3, axis=1),
-    ], axis=1)
-
-    # Apply ploidy
-    A4 = ploidies[:, None] * I4
-
-    counts0 = A4[:, 0]
-    counts1 = A4[:, 1]
-    counts2 = A4[:, 2]
-    counts3 = A4[:, 3]
-
-    dipDenom = counts1 + counts2 + counts3
-    hapDenom = 2 * dipDenom
-    stateDenom = dipDenom + counts0
-
-    # Avoid division warnings cleanly
-    with np.errstate(divide="ignore", invalid="ignore"):
-        HI   = (counts2 + 2 * counts3) / hapDenom
-        HOM1 = counts1 / dipDenom
-        HET  = counts2 / dipDenom
-        HOM2 = counts3 / dipDenom
-        U    = counts0 / stateDenom
-
-    summaries = [HI, HOM1, HET, HOM2, U]
-
-    return summaries, RetainedNumer, RetainedDenom
 
 def get_DI_span(aDT):
+    """
+    Get the min and max DI values across all chromosomes.
+
+    Args:   aDT : DiemType
+    """
     minDI=float('inf')
     maxDI=float('-inf')
-    for idx, chr  in enumerate(aDT.DMBC):
+    for idx, chr  in enumerate(aDT.DIByChr):
         minDI=min(minDI,min(aDT.DIByChr[idx]))
         maxDI=max(minDI,max(aDT.DIByChr[idx]))
     return [minDI,maxDI]
 
-def statewise_genomes_summary_given_DI(aDT, DIthreshold: float):
+
+
+
+"""______________________START statewise_genomes_summary_given_DI______________________________"""
+
+
+
+def _statewise_summary_one_chr(SM, DI, ploidies, DIthreshold):
+    """
+    Compute statewise summary for ONE chromosome.
+    Returns (counts_dict, (RetainedNumer, RetainedDenom))
+
+    This is a helper for PAR_statewise_genomes_summary_given_DI.
+    """
+
+    nInds = SM.shape[0]
+
+    DIfilter = DI >= DIthreshold
+    RetainedNumer = int(np.count_nonzero(DIfilter))
+    RetainedDenom = int(DIfilter.size)
+
+    if RetainedNumer == 0:
+        return (
+            {
+                "counts0": np.zeros(nInds, dtype=float),
+                "counts1": np.zeros(nInds, dtype=float),
+                "counts2": np.zeros(nInds, dtype=float),
+                "counts3": np.zeros(nInds, dtype=float),
+            },
+            (RetainedNumer, RetainedDenom),
+        )
+
+    SMf = SM[:, DIfilter]
+
+    # Vectorised masks
+    is0 = (SMf == 0)
+    is1 = (SMf == 1)
+    is2 = (SMf == 2)
+    is3 = ~(is0 | is1 | is2)
+
+    counts0 = is0.sum(axis=1)
+    counts1 = is1.sum(axis=1)
+    counts2 = is2.sum(axis=1)
+    counts3 = is3.sum(axis=1)
+
+    w = ploidies.astype(float)
+
+    return (
+        {
+            "counts0": w * counts0,
+            "counts1": w * counts1,
+            "counts2": w * counts2,
+            "counts3": w * counts3,
+        },
+        (RetainedNumer, RetainedDenom),
+    )
+
+
+def PAR_statewise_genomes_summary_given_DI(
+    aDT,
+    DIthreshold: float,
+    n_jobs=-1,
+    backend="loky",
+):
+    """
+    Parallel version of statewise_genomes_summary_given_DI.
+
+    DMBCtoucher
+
+    Parallelised over chromosomes.
+    """
+
+    nChr = len(aDT.DMBC)
+
+    results = Parallel(
+        n_jobs=n_jobs,
+        backend=backend,
+        prefer="processes",
+        batch_size=1,
+    )(
+        delayed(_statewise_summary_one_chr)(
+            aDT.DMBC[i],
+            aDT.DIByChr[i],
+            aDT.chrPloidies[i],
+            DIthreshold,
+        )
+        for i in range(nChr)
+    )
+
+    chrom_counts = [r[0] for r in results]
+    chrom_retained = [r[1] for r in results]
+
+    return chrom_counts, chrom_retained
+
+
+
+def SER_statewise_genomes_summary_given_DI(aDT, DIthreshold: float):
     """
     Statewise summary of genomes under a DI threshold.
+
+    DMBCtoucher
 
     Refinements over genomes_summary_given_DI:
       1) counts3 = count of states NOT in {0,1,2}
@@ -593,11 +604,20 @@ def statewise_genomes_summary_given_DI(aDT, DIthreshold: float):
 
     return chrom_counts, chrom_retained
 
+
+def statewise_genomes_summary_given_DI(aDT, DIthreshold: float):
+    if len(aDT.DMBC) >= 6:
+        return PAR_statewise_genomes_summary_given_DI(aDT, DIthreshold)
+    else:
+        return SER_statewise_genomes_summary_given_DI(aDT, DIthreshold)
+"""______________________END statewise_genomes_summary_given_DI______________________________"""
+
+
 def summaries_from_statewise_counts(chrom_counts):
     """
     Compute [HI, HOM1, HET, HOM2, U] from statewise chrom_counts.
 
-    chrom_counts: iterable of dicts with keys
+    Args: chrom_counts: iterable of dicts with keys
         'counts0', 'counts1', 'counts2', 'counts3'
         (arrays of shape nInds)
 
@@ -623,45 +643,30 @@ def summaries_from_statewise_counts(chrom_counts):
     return [HI, HOM1, HET, HOM2, U]
 
 
-def genomes_strings_given_DI(dPol, DIthreshold, *, flatten=True, as_array=True):
+
+def genomes_summary_given_DI(aDT, DIthreshold: float):
     """
-    Efficiently return DI-filtered genome strings or arrays.
+    Summarises a diemType.DMBC across chromosomes, applying a DI threshold filter.
+    Uses statewise_genomes_summary_given_DI for efficiency and single-point-of-entry to DMBC.
 
-    Assumes:
-      - dPol.DMBC : list of arrays (n_individuals, n_sites_chr)
-      - dPol.DIByChr : list of DI arrays per chromosome
-      - dPol.DIfilteredGenomes semantics already validated
+    Args:
+    aDT: a DiemType
+    DIthreshold: DI threshold filter
+    Returns:
+    summaries: list of per-individual summary arrays [HI, HOM1, HET, HOM2, U]
+    RetainedNumer: number of retained sites after DI filtering
+    RetainedDenom: total number of sites before DI filtering
     """
+    chrom_counts, chrom_retained = \
+        statewise_genomes_summary_given_DI(aDT, DIthreshold)
 
-    n_inds = dPol.DMBC[0].shape[0]
-    filtered_chunks = []
+    summaries = summaries_from_statewise_counts(chrom_counts)
 
-    for chr_idx, DM in enumerate(dPol.DMBC):
-        DIfilter = dPol.DIByChr[chr_idx] >= DIthreshold
-        if not np.any(DIfilter):
-            continue
+    DInumer = sum(n for n, _ in chrom_retained)
+    DIdenom = sum(d for _, d in chrom_retained)
 
-        # slice once
-        SMf = DM[:, DIfilter]
+    return summaries, DInumer, DIdenom
 
-        # convert to characters efficiently
-        # assume states {0,1,2,3} map to '_','0','1','2' or similar
-        # adjust mapping if needed
-        state_map = np.array(['_', '0', '1', '2'], dtype='<U1')
-        filtered_chunks.append(state_map[SMf])
-
-    if not filtered_chunks:
-        if as_array:
-            return np.empty((n_inds, 0), dtype='<U1')
-        return [''] * n_inds
-
-    G = np.concatenate(filtered_chunks, axis=1)
-
-    if as_array:
-        return G
-
-    # string form
-    return [''.join(row) for row in G]
 
 
 def fractional_positions_of_multiples(A, delta):
@@ -715,13 +720,7 @@ diemColours = [
     mcolors.to_hex((255/255, 229/255, 0)),  # RGBColor[255/255, 229/255, 0] - Yellow
     mcolors.to_hex((0, 128/255, 128/255))   # RGBColor[0, 128/255, 128/255] - Teal
 ]
-char_to_index = {
-    '_': 0,
-    'U': 0,
-    '0': 1,
-    '1': 2,
-    '2': 3
-}
+
 
 
 """________________________________________ START GenomeSummariesPlot ___________________"""
@@ -746,11 +745,16 @@ class GenomeSummaryPlot:
         self.indHIorder = np.arange(len(dPol.indNames))
 
         # initial summaries
-        self.summaries, self.DInumer, self.DIdenom = genomes_summary_given_DI(
-            dPol, float("-inf")
-        )
-        self.prop = self.DInumer / self.DIdenom
+        self.chrom_counts, self.chrom_retained = \
+            statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
 
+        self.summaries = summaries_from_statewise_counts(self.chrom_counts)
+
+        self.DInumer = sum(n for n, _ in self.chrom_retained)
+        self.DIdenom = sum(d for _, d in self.chrom_retained)
+        # END of statewise insert
+        self.prop = self.DInumer / self.DIdenom
+        
         # ---- figure & axes ----
         self.fig, self.ax = plt.subplots(figsize=(11, 4))
 
@@ -851,9 +855,6 @@ class GenomeSummaryPlot:
     # ---------------- callbacks ----------------
 
     def DIupdate(self, val):
-        #self.summaries, self.DInumer, self.DIdenom = genomes_summary_given_DI(
-        #    self.dPol, val
-        #)
         self.chrom_counts, self.chrom_retained = \
             statewise_genomes_summary_given_DI(self.dPol, val)
 
@@ -1036,7 +1037,7 @@ class GenomeMultiSummaryPlot:
     # ==================================================
 
     def _validate_chrom_indices(self, chrom_indices):
-        max_idx = len(self.dPol.DMBC) - 1
+        max_idx = len(self.dPol.chrLengths) - 1
         valid, rejected = [], []
 
         for idx in chrom_indices:
@@ -1270,7 +1271,6 @@ class GenomicDeFinettiPlot:
         # ---- figure & axes ----
         self.fig, self.ax = plt.subplots(figsize=(10,10))
         self._setup_axes()
-#        self._update_title(float("-inf"))
         self.ax.set_title('Genomic de Finetti; no DI filter')
 
         # background: triangle + HW curve
@@ -1297,7 +1297,7 @@ class GenomicDeFinettiPlot:
         x = hom2 + 0.5 * het
         y = (np.sqrt(3) / 2) * het
         return x, y
-    # EURG
+    
     def _update_title(self, DIval):
         prop = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
 
@@ -1537,11 +1537,15 @@ class GenomicMultiDeFinettiPlot:
         n_cols = min(self.max_cols, n_plots)
         n_rows = int(np.ceil(n_plots / n_cols))
 
+
         self.fig, self.axes = plt.subplots(
             n_rows, n_cols,
             figsize=(4.8 * n_cols, 4.6 * n_rows),
             squeeze=False
         )
+
+        #superTitle = self.fig.suptitle('Genomic de Finetti; no DI filter')
+        # no can do... DI slider forces entire plot redraw.
 
         self.fig.subplots_adjust(
             left=0.06, right=0.98,
@@ -1665,6 +1669,8 @@ class GenomicMultiDeFinettiPlot:
 
         self.global_summaries = summaries_from_statewise_counts(self.chrom_counts)
         self.indHIorder = np.argsort(self.global_summaries[0])
+        totNumer = 0
+        totDenom = 0
 
         for idx in self.chrom_indices:
             summaries = summaries_from_statewise_counts(
@@ -1688,6 +1694,10 @@ class GenomicMultiDeFinettiPlot:
             self.chrom_axes[idx].set_title(
                 f"Chr {idx} | {num:,}/{denom:,} sites", fontsize=10
             )
+            totNumer += num
+            totDenom += denom
+
+        prop = totNumer / totDenom if totDenom > 0 else 0.0
 
         self.fig.canvas.draw_idle()
 
@@ -1725,7 +1735,7 @@ class GenomicMultiDeFinettiPlot:
     # ======================================================
 
     def _validate_chrom_indices(self, chrom_indices):
-        max_idx = len(self.dPol.DMBC) - 1
+        max_idx = len(self.dPol.chrLengths) - 1
         valid = [i for i in chrom_indices if 0 <= int(i) <= max_idx]
         if not valid:
             raise ValueError("No valid chromosome indices")
@@ -1748,8 +1758,9 @@ class GenomicContributionsPlot:
     Args:
         dPol: DiemType object containing genomic data.
     """
-    def __init__(self, dPol):
+    def __init__(self, dPol, chrom_indices=None):
         self.dPol = dPol
+        self.chrom_indices = chrom_indices
         self.fontsize = 8
 
         # initial computation
@@ -1773,48 +1784,66 @@ class GenomicContributionsPlot:
     # Core computation
     # --------------------------------------------------
 
-
     def _compute_contributions(self, DIval):
         chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(
             self.dPol, DIval
         )
 
-        n_chr = len(chrom_counts)
+        # --------------------------------------------------
+        # Restrict chromosomes if requested (surgical)
+        # --------------------------------------------------
+        if self.chrom_indices is not None:
+            kept = []
+            n_chr = len(chrom_counts)
+
+            for ci in self.chrom_indices:
+                if isinstance(ci, int) and 0 <= ci < n_chr:
+                    kept.append(ci)
+
+            if not kept:
+                raise ValueError("GenomicContributionsPlot: no valid chromosome indices")
+
+        else:
+            kept = range(len(chrom_counts))
+
+        # --------------------------------------------------
+        # Aggregate over kept chromosomes
+        # --------------------------------------------------
         self.DInumer = 0
         self.DIdenom = 0
 
         self.chrom_labels = []
-        self.props = np.zeros((n_chr, 5))  # HOM1, HET, HOM2, U, excluded
+        self.props = np.zeros((len(kept), 5))  # HOM1, HET, HOM2, U, excluded
 
-        for i in range(n_chr):
-            chr_name = Chr_Nickname(self.dPol.chrNames[i])
+        for out_i, chr_i in enumerate(kept):
+            chr_name = Chr_Nickname(self.dPol.chrNames[chr_i])
             self.chrom_labels.append(chr_name)
 
-            counts = chrom_counts[i]
-            kept_sites, total_sites = chrom_retained[i]
-            self.DInumer = self.DInumer + kept_sites
-            self.DIdenom = self.DIdenom + total_sites
+            counts = chrom_counts[chr_i]
+            kept_sites, total_sites = chrom_retained[chr_i]
 
-            # ---- summed ploidy-weighted counts over individuals ----
+            self.DInumer += kept_sites
+            self.DIdenom += total_sites
+
             c0 = np.sum(counts["counts0"])
             c1 = np.sum(counts["counts1"])
             c2 = np.sum(counts["counts2"])
             c3 = np.sum(counts["counts3"])
 
-            total_alleles = total_sites * np.sum(self.dPol.chrPloidies[i])  # SJEB was bugged. ChatGPT unaware of ploidy
+            total_alleles = total_sites * np.sum(self.dPol.chrPloidies[chr_i])
             if total_alleles == 0:
                 continue
 
-
-            self.props[i, :] = [
-                c1 / total_alleles,                                  # HOM1
-                c2 / total_alleles,                                  # HET
-                c3 / total_alleles,                                  # HOM2
-                c0 / total_alleles,                                  # U
-                (1.0 - kept_sites / total_sites) if total_sites else 0 # excluded
+            self.props[out_i, :] = [
+                c1 / total_alleles,                                   # HOM1
+                c2 / total_alleles,                                   # HET
+                c3 / total_alleles,                                   # HOM2
+                c0 / total_alleles,                                   # U
+                (1.0 - kept_sites / total_sites) if total_sites else 0
             ]
 
         self.current_DI = DIval
+
 
     # --------------------------------------------------
     # Drawing
@@ -1861,14 +1890,10 @@ class GenomicContributionsPlot:
 
         self.ax.set_ylabel("Proportion of SNVs")
 
-        #self.ax.set_title(
-        #    "Genomic contributions by chromosome  DI ≥ {:.2f}".format(self.current_DI),
-        #    pad=12
-        #)  EURG
         prop = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
 
         self.ax.set_title(
-            "Genomic de Finetti plot  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            "Genomic contributions plot  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
             .format(self.current_DI, self.DInumer, 100 * prop),
             fontsize=12,
             pad=12
@@ -1935,11 +1960,13 @@ class GenomicContributionsPlot:
 
 
 
-"""________________________________________ START diemPaisPlot ___________________"""
+"""________________________________________ START diemPairsPlot ___________________"""
 
 def pwmatrixFromDiemType(aDT, DIthreshold=float("-inf")):
     """
     Compute a DI-filtered pairwise distance matrix from a DiemType object.
+
+    DMBCtoucher
 
     Args:
         aDT : DiemType
@@ -2044,9 +2071,33 @@ def _pwmatrix_row(i, G, W):
     return i, row
 
 
+
+#------------------version without char sidestep-------------------------------
+def _pwmatrix_row_numeric(i, G, W):
+    """
+    Compute one row of the pairwise distance matrix from numeric codes.
+    """
+    n = G.shape[0]
+    row = np.zeros(n, dtype=float)
+
+    ai = G[i]
+    for j in range(n):
+        aj = G[j]
+
+        valid = (ai != 0) & (aj != 0)
+        denom = valid.sum()
+
+        if denom == 0:
+            row[j] = np.nan
+        else:
+            row[j] = W[ai[valid], aj[valid]].sum() / denom
+
+    return i, row
+
 def PARApwmatrixFromDiemType(
     aDT,
     DIthreshold=float("-inf"),
+    chrom_indices=None,
     n_jobs=-1,
     backend="loky",
 ):
@@ -2068,19 +2119,32 @@ def PARApwmatrixFromDiemType(
     """
 
     # -------------------------------------------------
-    # DI-filtered genomes (ONCE)
+    # DI-filtered genomes, optionally chromosome-restricted
     # -------------------------------------------------
-    G_chars = genomes_strings_given_DI(aDT, DIthreshold, as_array=True)
-    if G_chars.shape[1] == 0:
-        n = G_chars.shape[0]
-        return np.full((n, n), np.nan)
+    chunks = []
+    n_ind = aDT.DMBC[0].shape[0]
 
-    # map chars → codes {_,0,1,2} → {0,1,2,3}
-    G = np.zeros(G_chars.shape, dtype=np.int8)
-    G[G_chars == "0"] = 1
-    G[G_chars == "1"] = 2
-    G[G_chars == "2"] = 3
+    # Default: all chromosomes
+    if chrom_indices is None:
+        chrom_indices = range(len(aDT.DMBC))
 
+    for chr_idx in chrom_indices:
+        SM = aDT.DMBC[chr_idx]
+        DI = aDT.DIByChr[chr_idx]
+
+        keep = DI >= DIthreshold
+        if not np.any(keep):
+            continue
+
+        # Clamp states: anything >2 → 3  (DMBCtoucher future-proofing)
+        SMf = np.minimum(SM[:, keep], 3).astype(np.int8)
+        chunks.append(SMf)
+
+    if not chunks:
+        return np.full((n_ind, n_ind), np.nan)
+
+    # Concatenate retained chromosomes
+    G = np.concatenate(chunks, axis=1)
     n = G.shape[0]
 
     # -------------------------------------------------
@@ -2091,6 +2155,7 @@ def PARApwmatrixFromDiemType(
     W[1, 3] = W[3, 1] = 2
     W[2, 2] = 1
     W[2, 3] = W[3, 2] = 1
+    # (0,* and *,0 excluded by valid mask)
 
     # -------------------------------------------------
     # Parallel row computation
@@ -2099,9 +2164,9 @@ def PARApwmatrixFromDiemType(
         n_jobs=n_jobs,
         backend=backend,
         prefer="processes",
-        batch_size=1
+        batch_size=1,
     )(
-        delayed(_pwmatrix_row)(i, G, W)
+        delayed(_pwmatrix_row_numeric)(i, G, W)
         for i in range(n)
     )
 
@@ -2113,12 +2178,7 @@ def PARApwmatrixFromDiemType(
         M[i, :] = row
 
     return M
-
-
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from matplotlib.colors import LinearSegmentedColormap
+#-------------------------------------------------
 
 
 class diemPairsPlot:
@@ -2252,13 +2312,13 @@ class diemPairsPlot:
             slider_height
         ])
 
-        self.label_fontsize = 7
+        self.label_fontsize = 4 #was 7
 
         self.font_slider = Slider(
             ax_fs,
             "Labels",
-            4,
-            16,
+            0,# EURGfont
+            6,
             valinit=self.label_fontsize,
             valstep=1
         )
@@ -2347,15 +2407,260 @@ class diemPairsPlot:
 
 
 
+"""________________________________________ START DiemMultiPairsPlot__________________"""
+
+
+class diemMultiPairsPlot:
+    """
+    Multi-chromosome version of diemPairsPlot.
+
+    One brick heatmap per chromosome, ordered by global Hybrid Index,
+    arranged in a grid. The top-right grid cell contains the shared
+    colour key.
+
+    A single slider controls axis label font size for all subplots.
+    """
+
+    def __init__(
+        self,
+        dPol,
+        chrom_indices,
+        DIthreshold=float("-inf"),
+        max_cols=3,
+        figsize=(12, 8),
+    ):
+        self.dPol = dPol
+        self.chrom_indices = list(chrom_indices)
+        self.DIthreshold = DIthreshold
+
+        # -------------------------------------------------
+        # Global HI ordering (authoritative, once)
+        # -------------------------------------------------
+        summaries, _, _ = genomes_summary_given_DI(dPol, DIthreshold)
+        HI = summaries[0]
+        self.ind_order = np.argsort(HI)
+
+        self.indNames = np.array(dPol.indNames)[self.ind_order]
+        self.n = len(self.indNames)
+
+        # -------------------------------------------------
+        # Compute per-chromosome matrices
+        # -------------------------------------------------
+        self.Ms = []
+        vmins, vmaxs = [], []
+
+        for chr_idx in self.chrom_indices:
+            M = PARApwmatrixFromDiemType(
+                dPol,
+                DIthreshold=DIthreshold,
+                chrom_indices=[chr_idx],
+            )
+            M = M[self.ind_order][:, self.ind_order]
+            self.Ms.append(M)
+
+            finite = np.isfinite(M)
+            if np.any(finite):
+                vmins.append(np.nanmin(M))
+                vmaxs.append(np.nanmax(M))
+
+        self.vmin = min(vmins) if vmins else 0.0
+        self.vmax = max(vmaxs) if vmaxs else 1.0
+
+        # -------------------------------------------------
+        # Grid layout
+        # -------------------------------------------------
+        n_plots = len(self.chrom_indices)
+        n_cols = min(max_cols, n_plots)
+        n_rows = int(np.ceil(n_plots / n_cols))
+
+        # +1 cell for colour key (top-right)
+        self.fig = plt.figure(figsize=figsize)
+        gs = self.fig.add_gridspec(
+            n_rows,
+            n_cols + 1,
+            width_ratios=[20] * n_cols + [1.6],
+            hspace=0.35,
+            wspace=0.35,   # ← more x-space for labels
+        )
+
+        self.axes = []
+        for r in range(n_rows):
+            for c in range(n_cols):
+                idx = r * n_cols + c
+                if idx < n_plots:
+                    self.axes.append(self.fig.add_subplot(gs[r, c]))
+
+        # shared colour key: top-right
+        self.cax = self.fig.add_subplot(gs[0, -1])
+
+        # -------------------------------------------------
+        # Colormap
+        # -------------------------------------------------
+        self.cmap = LinearSegmentedColormap.from_list(
+            "soft_coolwarm",
+            ["#1e90ff", "white", "#fff266", "#ff1a1a"],
+        )
+
+        self.fontsize = 4 # was 7
+
+        # -------------------------------------------------
+        # Draw chromosome subplots
+        # -------------------------------------------------
+        for ax, M, chr_idx in zip(self.axes, self.Ms, self.chrom_indices):
+            self._draw_bricks(ax, M)
+            self._format_axes(ax, chr_idx)
+
+        # -------------------------------------------------
+        # Colour key + widgets
+        # -------------------------------------------------
+        self._draw_colour_key()
+        self._init_font_slider()
+        self._install_format_coord()
+
+        plt.show()
+
+    # =================================================
+    # Drawing
+    # =================================================
+
+    def _draw_bricks(self, ax, M):
+        norm = plt.Normalize(self.vmin, self.vmax)
+
+        for i in range(self.n):
+            for j in range(self.n):
+                val = M[j, i]
+                if not np.isfinite(val):
+                    color = "black"
+                else:
+                    color = self.cmap(norm(val))
+
+                ax.add_patch(
+                    Rectangle(
+                        (i, j),
+                        1,
+                        1,
+                        facecolor=color,
+                        edgecolor="none",
+                    )
+                )
+
+        ax.set_xlim(0, self.n)
+        ax.set_ylim(0, self.n)
+        ax.set_aspect("equal")
+
+    def _format_axes(self, ax, chr_idx):
+        centers = np.arange(self.n) + 0.5
+
+        ax.set_xticks(centers)
+        ax.set_yticks(centers)
+
+        ax.set_xticklabels(
+            self.indNames,
+            rotation=90,
+            fontsize=self.fontsize,
+        )
+        ax.set_yticklabels(
+            self.indNames,
+            fontsize=self.fontsize,
+        )
+
+        ax.set_title(f"Chr {chr_idx}", fontsize=10, pad=8)
+
+    def _draw_colour_key(self):
+        gradient = np.linspace(self.vmin, self.vmax, 256).reshape(-1, 1)
+
+        self.cax.imshow(
+            gradient,
+            aspect="auto",
+            cmap=self.cmap,
+            origin="lower",
+        )
+
+        self.cax.set_xticks([])
+        self.cax.set_yticks([0, 255])
+        self.cax.set_yticklabels(
+            [f"{self.vmin:.2f}", f"{self.vmax:.2f}"],
+            fontsize=8,
+        )
+        self.cax.set_title("Distance", fontsize=9)
+
+    # =================================================
+    # Hover logic
+    # =================================================
+
+    def _install_format_coord(self):
+        n = self.n
+
+        for ax, M in zip(self.axes, self.Ms):
+
+            def make_formatter(M):
+                def format_coord(x, y):
+                    fallback = " " * 40
+                    i = int(np.floor(x))
+                    j = int(np.floor(y))
+
+                    if 0 <= i < n and 0 <= j < n:
+                        a = self.indNames[j]
+                        b = self.indNames[i]
+                        d = M[j, i]
+                        if np.isfinite(d):
+                            return f"{a} × {b} : {d:.3f}"
+                        return f"{a} × {b} : NA"
+                    return fallback
+
+                return format_coord
+
+            ax.format_coord = make_formatter(M)
+
+    # =================================================
+    # Font size slider (under colour key)
+    # =================================================
+
+    def _init_font_slider(self):
+        bbox = self.cax.get_position()
+        ax_FS = self.fig.add_axes(
+            [bbox.x0, bbox.y0 - 0.06, bbox.width, 0.03]
+        )
+
+        self.font_slider = Slider(
+            ax_FS,
+            "Label",
+            0, 4,
+            valinit=self.fontsize,
+            valstep=1,
+        )
+        self.font_slider.on_changed(self._on_font_change)
+
+    def _on_font_change(self, val):
+        self.fontsize = int(val)
+
+        for ax in self.axes:
+            ax.set_xticklabels(
+                self.indNames,
+                rotation=90,
+                fontsize=self.fontsize,
+            )
+            ax.set_yticklabels(
+                self.indNames,
+                fontsize=self.fontsize,
+            )
+
+        self.fig.canvas.draw_idle()
+
+
+"""________________________________________ END DiemMultiPairsPlot__________________"""
+
 
 """________________________________________ START DiemPlotPrep__________________"""
-
+    
+    
 class DiemPlotPrep:
     """ 
     Prepares data for DI-based plotting, including filtering, smoothing, dithering, and label generation.
     Args:
         plot_theme: Theme for plotting.
         ind_ids: List of individual IDs.
+        chrRefLengths: Dictionary of chromosome reference lengths. Perhaps
         polarised_data: DataFrame containing polarised genomic data.
         di_threshold: DI threshold for filtering.
         di_column: Column name for DI values.
@@ -2364,7 +2669,7 @@ class DiemPlotPrep:
         ticks: Optional ticks for plotting.
         smooth: Optional smoothing parameter.
     """
-    def __init__(self, plot_theme, ind_ids, polarised_data, di_threshold, di_column, diemStringPyCol, genome_pixels, ticks=None, smooth=None):
+    def __init__(self, plot_theme, ind_ids, chrRefLengths, polarised_data, di_threshold, di_column, diemStringPyCol, genome_pixels, ticks=None, smooth=None):
         self.polarised_data = polarised_data
         self.di_threshold = di_threshold
         self.di_column = di_column
@@ -2372,6 +2677,7 @@ class DiemPlotPrep:
         self.genome_pixels = genome_pixels
         self.plot_theme = plot_theme
         self.ind_ids = ind_ids
+        self.chrRefLengths = chrRefLengths
         self.ticks = ticks
         self.smooth = smooth
 
@@ -2392,18 +2698,41 @@ class DiemPlotPrep:
         self.iris_plot_prep = {}
         self.diemDITgenomes_ordered = None
         self.nBasesDithered = None
+        self.chrom_keys = None
+        self.MapBC = None # primitive map positions of each SNV
 
         self.diem_plot_prep()
 
     def diem_plot_prep(self):
         """ Perform DI filtering, dithering, and label generation """
         self.filter_data()
+        
         if self.smooth:
+            self.initMapcoords() # before smoothing
             self.kernel_smooth(self.smooth)
         self.diem_dithering()
 
         self.generate_plot_label(self.plot_theme)
         self.format_bed_data() 
+
+
+    def initMapcoords(self):
+        """Initialize map coordinates based on filtered BED data"""
+        if self.DIfilteredBED_formatted is None:
+            self.MapBC = None
+            return
+
+        self.MapBC = []
+        for i in range(len(self.chrom_keys)):
+            bed_positions = self.DIfilteredBED_formatted[i]
+            ref_len = self.chrRefLengths[i]
+
+            # normalize to chromosome-relative coordinate [0, 1]
+            self.MapBC.append(bed_positions / ref_len)
+
+        # optional sanity check (can remove later)
+        print("Initialized MapBC for plotting.", self.MapBC[0][:10])
+
 
     # format_bed_data reworked by ChatGPT 5.2 for speed, but mostly clarity
     def format_bed_data(self):
@@ -2455,12 +2784,25 @@ class DiemPlotPrep:
         self.DIfilteredBED = self.DIfilteredDATA[['chrom','start']].values.tolist()
         self.DIpercent = round(100 * len(self.DIfilteredDATA) / len(self.polarised_data))
         self.DIfilteredScafRLEs = RichRLE(self.DIfilteredDATA['chrom'].values.tolist())
-        
+
+        # the following WAS the first operation of dithering section!
+        # now here, so map of refpos can be set before smoothing...
+        # -------------------------------------------------
+        # 1. Group BED entries by chromosome (single pass)
+        # -------------------------------------------------
+        grouped = defaultdict(list)
+        for key, value in self.DIfilteredBED:
+            grouped[key].append(value)
+    
+        self.chrom_keys = list(grouped.keys())
+        self.DIfilteredBED_formatted = [
+            np.asarray(grouped[k]) for k in self.chrom_keys
+        ]       
 
 
     def kernel_smooth(self, scale): # ChatGPT drop-in
  #       from collections import defaultdict
-        import numpy as np
+ #       import numpy as np
     
         # --------------------------------------------------
         # 1. Precompute scaffold → indices
@@ -2471,15 +2813,23 @@ class DiemPlotPrep:
     
         # --------------------------------------------------
         # 2. Precompute scaffold → positions array
+        #    Use MapBC if available (chromosome-relative metric)
         # --------------------------------------------------
-        scaffold_positions = defaultdict(list)
-        for scaffold, pos in self.DIfilteredBED:
-            scaffold_positions[scaffold].append(pos)
-    
-        scaffold_arrays = {
-            scaffold: np.asarray(positions)
-            for scaffold, positions in scaffold_positions.items()
-        }
+        if self.MapBC is not None:
+            scaffold_arrays = {
+                chrom: self.MapBC[i]
+                for i, chrom in enumerate(self.chrom_keys)
+            }
+        else:
+            scaffold_positions = defaultdict(list)
+            for scaffold, pos in self.DIfilteredBED:
+                scaffold_positions[scaffold].append(pos)
+
+            scaffold_arrays = {
+                scaffold: np.asarray(positions)
+                for scaffold, positions in scaffold_positions.items()
+            }
+
     
         # --------------------------------------------------
         # 3. Split genomes by scaffold (numeric form)
@@ -2493,7 +2843,7 @@ class DiemPlotPrep:
             for scaffold, indices in scaffold_indices.items():
                 # extract once, convert once
                 s = ''.join(genome[i] for i in indices)
-                s = s.replace("_", "3")
+                s = s.replace("_", "3")     # Future proofing? DMBCtoucher
                 scaffold_haplotypes[scaffold].append(
                     np.fromiter((ord(c) - 48 for c in s), dtype=np.int8)
                 )
@@ -2506,7 +2856,7 @@ class DiemPlotPrep:
         for scaffold, haplos in scaffold_haplotypes.items():
             haplo_matrix = np.vstack(haplos)
     
-            smoothed = diem.smooth.laplace_smooth_multiple_haplotypes(
+            smoothed = smooth.laplace_smooth_multiple_haplotypes(  # WAS diem.smooth
                 scaffold_arrays[scaffold],
                 haplo_matrix,
                 scale
@@ -2555,17 +2905,7 @@ class DiemPlotPrep:
     
     
     def diem_dithering(self):
-        # -------------------------------------------------
-        # 1. Group BED entries by chromosome (single pass)
-        # -------------------------------------------------
-        grouped = defaultdict(list)
-        for key, value in self.DIfilteredBED:
-            grouped[key].append(value)
-    
-        chrom_keys = list(grouped.keys())
-        self.DIfilteredBED_formatted = [
-            np.asarray(grouped[k]) for k in chrom_keys
-        ]
+
         
         # -------------------------------------------------
         # 2. Precompute chromosome spans
@@ -2573,14 +2913,14 @@ class DiemPlotPrep:
         self.length_of_chromosomes = {}
     
         start = 0
-        for key, bed_data in zip(chrom_keys, self.DIfilteredBED_formatted):
+        for key, bed_data in zip(self.chrom_keys, self.DIfilteredBED_formatted):
             end = start + len(bed_data)
             self.length_of_chromosomes[key] = (start, end, len(bed_data))
             start = end
         # -------------------------------------------------
         # 3. Prepare iris_plot_prep ticks (vectorised shift)
         # -------------------------------------------------
-        for idx, (key, bed) in enumerate(zip(chrom_keys, self.DIfilteredBED_formatted), start=1):
+        for idx, (key, bed) in enumerate(zip(self.chrom_keys, self.DIfilteredBED_formatted), start=1):
             x_ticks = fractional_positions_of_multiples(bed, self.ticks)
     
             offset = self.length_of_chromosomes[key][0]
@@ -2608,19 +2948,62 @@ class DiemPlotPrep:
             length_data = [row[1] for row in chr]
             split_lengths = self.GappedQuotientSplitLengths(length_data, self.nBasesDithered)# nBasesDithered was self.genome_pixels SJEB 24 Jan 2026 
             processed_diemDITgenomes.append(split_lengths)
-        processed_diemDITgenomes = Flatten(processed_diemDITgenomes)
+        
+        #processed_diemDITgenomes = Flatten(processed_diemDITgenomes)
+        # IMPORTANT: EURG
+        # processed_diemDITgenomes is now:
+        #   List[chromosome][segment_length]
+        
         diemDITgenomes = []
+
+        # IMPORTANT: need chromosome order consistent with how processed_diemDITgenomes was built potential BUG
+        chrom_keys = list(self.length_of_chromosomes.keys())
+
         for genome in self.DIfilteredGenomes:
-            string_take_result = StringTakeList(genome, processed_diemDITgenomes)
-            state_count = Map(sStateCount, string_take_result)
-            combined = list(zip(state_count, processed_diemDITgenomes))
-            compressed = self.DITcompress(combined)
-            lengths = self.Lengths2StartEnds(compressed)
-            diemDITgenomes.append(lengths)
-    
+            per_chr = []
+
+            # iterate chromosomes in the SAME order as processed_diemDITgenomes
+            for chr_i, chr_lengths in enumerate(processed_diemDITgenomes):
+
+                chrom = chrom_keys[chr_i]
+                g0, g1, _ = self.length_of_chromosomes[chrom]   # global [start,end) slice in concatenated genome
+
+                # ---- THE SURGICAL FIX ----
+                genome_chr = genome[g0:g1]  # chromosome-local genome string
+                """print("DEBUG per-chr take:")
+                print("  chr_i:", chr_i)
+                print("  chrom:", chrom)
+                print("  g0,g1:", g0, g1)
+                print("  sum(chr_lengths):", sum(chr_lengths))
+                print("  genome_chr prefix (first 40):", genome_chr[:40])"""
+
+                # sanity (optional): check that the segment lengths sum to the chromosome slice length
+                # if sum(chr_lengths) != (g1 - g0):
+                #     print("WARN length mismatch", chr_i, chrom, sum(chr_lengths), (g1 - g0))
+
+                # now take segments from the chromosome-local string
+                string_take_result = StringTakeList(genome_chr, chr_lengths)
+
+                state_count = Map(sStateCount, string_take_result)
+                combined = list(zip(state_count, chr_lengths))
+                compressed = self.DITcompress(combined)
+                per_chr.append(self.Lengths2StartEnds(compressed))
+
+            diemDITgenomes.append(per_chr)
+
         self.diemDITgenomes = diemDITgenomes
     
-    
+        """print("\nDEBUG A1: diem_dithering output")
+        print("  len(diemDITgenomes):", len(self.diemDITgenomes))
+
+        g0 = self.diemDITgenomes[0]
+        print("  type(diemDITgenomes[0]):", type(g0))
+
+        if isinstance(g0, list):
+            print("  len(diemDITgenomes[0]):", len(g0))
+            print("  first 3 elements:", g0[:3])
+            print("  last 3 elements:", g0[-3:])"""
+
     def generate_plot_label(self, plot_theme):
         """ Generate the label for the plot """
         self.diemPlotLabel = f"{plot_theme} @ DI = {self.di_threshold}: {len(self.DIfilteredDATA)} sites ({self.DIpercent}%) {self.nBasesDithered} bases dithered."
@@ -2688,13 +3071,49 @@ class DiemPlotPrep:
     
         return result
     
+
+
+def flatten_ring_with_offsets(per_chr_ring, length_of_chromosomes):
+    """
+    Convert per-chromosome ring representation into a single
+    global-coordinate ring suitable for IrisPlot / LongPlot.
+
+    per_chr_ring:
+        [
+          [(w,s,e), ...],   # chromosome 0 (local coords)
+          [(w,s,e), ...],   # chromosome 1
+          ...
+        ]
+
+    length_of_chromosomes:
+        dict preserving chromosome order:
+          chrom -> (start, end, length)
+    """
+    flat = []
+    chrom_keys = list(length_of_chromosomes.keys())
+
+    for chr_idx, chr_segments in enumerate(per_chr_ring):
+        chrom = chrom_keys[chr_idx]
+        chrom_start = length_of_chromosomes[chrom][0]
+
+        for weights, s, e in chr_segments:
+            flat.append((
+                weights,
+                chrom_start + s - 1,   # preserve your 1→0 convention
+                chrom_start + e
+            ))
+
+    return flat
+
+
 def diemPlotPrepFromBedMeta(plot_theme, bed_file_path, meta_file_path,di_threshold,genome_pixels,ticks, smooth = None):
 
-    pzbed, bmIndIDs = read_diem_bed_4_plots(bed_file_path, meta_file_path)
+    pzbed, bmIndIDs, chrRefLengths = read_diem_bed_4_plots(bed_file_path, meta_file_path)
 
     prep = DiemPlotPrep(
         plot_theme=plot_theme,
         ind_ids=bmIndIDs,
+        chrRefLengths=chrRefLengths,
         polarised_data=pzbed,
         di_threshold=di_threshold,
         diemStringPyCol=10,
@@ -2782,254 +3201,363 @@ class WheelDiagram:
 
 """________________________________________ START diemIrisPlot ___________________"""
 
-def diemIrisPlot(
+
+
+
+"""________________________________________ START Iris and Long helper function ___________________"""
+def _restrict_chromosomes(
+    *,
     input_data,
     refposes,
-    title=None,
-    names=None,
+    length_of_chromosomes,
     bed_info=None,
-    length_of_chromosomes=None,
-    heatmap=None,
+    chrom_indices=None,
 ):
     """
-    Creates an iris plot (wheel diagram) based on the provided input data.
-    Args:
-        input_data: List of rings, where each ring is a list of triplets (weights, start_pos, end_pos).
-        refposes: Reference positions for the data.
-        title: Optional title for the plot.
-        names: Optional list of names for each ring.
-        bed_info: Optional dictionary with BED information for outer ticks.
-        length_of_chromosomes: Optional dictionary with chromosome lengths for inner wedges.
-        heatmap: Optional heatmap data for an additional ring.
-    Returns:
-        Matplotlib figure and axes objects.
+    Restrict per-chromosome genome data to a subset of chromosomes and,
+    if requested, pack them contiguously into a genome-global coordinate system.
+
+    Canonical assumptions:
+      - input_data[ind][chr] = list of (weights, start, end), chromosome-local
+      - start/end are 1-based and inclusive (as produced by PlotPrep)
+      - NO flattening occurs here
     """
-    # -------------------------------------------------
-    # Figure & axes
-    # -------------------------------------------------
-    fig, ax = plt.subplots(figsize=(10, 10))
-    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.98)
-
-    if title is not None:
-        ax.set_title(title)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_aspect("auto")
-
-    ax.set_xticks([])
-    ax.set_yticks([])
-    for spine in ax.spines.values():
-        spine.set_visible(False)
 
     # -------------------------------------------------
-    # Wheel geometry
+    # Trivial case: no restriction
     # -------------------------------------------------
-    center = np.array((0.5, 0.5))
-    radius = 0.48
-    cutout_angle = 20
-    number_of_rings = len(input_data)
+    if chrom_indices is None:
+        return input_data, refposes, length_of_chromosomes, bed_info
 
-    wd = WheelDiagram(
-        ax,
-        center,
-        radius,
-        number_of_rings + (1 if heatmap is not None else 0),
-        cutout_angle=cutout_angle,
-    )
+    if length_of_chromosomes is None:
+        raise ValueError("chrom_indices requires length_of_chromosomes")
 
-    if heatmap is not None:
-        wd.add_heatmap_ring(heatmap)
-
-    for ring in input_data:
-        wd.add_ring(ring)
-
-    wd.clear_center()
+    chrom_keys = list(length_of_chromosomes.keys())
+    n_chr = len(chrom_keys)
 
     # -------------------------------------------------
-    # Geometry helpers (precomputed once)
+    # Validate chromosome indices
     # -------------------------------------------------
-    available_angle = 360 - cutout_angle
-    start_angle_offset = 90
-    max_position = input_data[0][-1][2]
+    kept = []
+    rejected = []
 
-    ring_width = (radius - wd.center_radius) / number_of_rings
+    for ci in chrom_indices:
+        if isinstance(ci, (int, np.integer)) and 0 <= int(ci) < n_chr:
+            kept.append(int(ci))
+        else:
+            rejected.append(ci)
 
-    chrom_ranges = []
-    if length_of_chromosomes is not None:
-        for chrom, (start, end, _) in length_of_chromosomes.items():
-            chrom_ranges.append(
-                #(chrom.replace("chromosome_", "Chr "), start, end)# Nickname Chromosomes
-                (Chr_Nickname(chrom), start, end)# Use Nickname function
-            )
+    if rejected:
+        print("restrict_chromosomes: rejected chromosome indices:", rejected)
 
-    # -------------------------------------------------
-    # Inner chromosome wedges + labels
-    # -------------------------------------------------
-    if chrom_ranges:
-        for idx, (chrom, start, end) in enumerate(chrom_ranges):
-            start_angle = start_angle_offset + 360 - available_angle * start / max_position
-            end_angle   = start_angle_offset + 360 - available_angle * end   / max_position
+    if not kept:
+        raise ValueError("restrict_chromosomes: no valid chromosome indices")
 
-            if idx % 2 == 0:
-                ax.add_artist(
-                    Wedge(center, radius / 2, end_angle, start_angle,
-                          color="lightgrey", alpha=0.3)
-                )
-
-            midpoint = 0.5 * (start + end)
-            mid_angle = start_angle_offset + 360 - available_angle * midpoint / max_position
-            mid_rad = np.deg2rad(mid_angle)
-
-            label_xy = center + (radius - 0.28) * np.array(
-                [np.cos(mid_rad), np.sin(mid_rad)]
-            )
-
-            ax.text(
-                label_xy[0],
-                label_xy[1],
-                chrom,
-                ha="center",
-                va="center",
-                fontsize=8,
-                rotation=mid_angle,
-                rotation_mode="anchor",
-            )
-
-        ax.add_artist(Wedge(center, 0.18, 0, 360, color="white"))
+    kept = sorted(kept)
 
     # -------------------------------------------------
-    # Outer ticks
+    # Build packed chromosome offsets
+    # -------------------------------------------------
+    chrom_offsets = {}
+    packed_cursor = 0.0
+
+    for chr_idx in kept:
+        chrom = chrom_keys[chr_idx]
+        _, _, L = length_of_chromosomes[chrom]
+
+        chrom_offsets[chr_idx] = packed_cursor
+        packed_cursor += L
+
+    # -------------------------------------------------
+    # Remap input_data (per individual)
+    # -------------------------------------------------
+    new_input_data = []
+
+    for indiv in input_data:
+        new_ring = []
+
+        for chr_idx in kept:
+            offset = chrom_offsets[chr_idx]
+            chr_segments = indiv[chr_idx]
+
+            for weights, s, e in chr_segments:
+                # s,e are chromosome-local (1-based)
+                new_ring.append((
+                    weights,
+                    offset + s,
+                    offset + e
+                ))
+
+        new_input_data.append(new_ring)
+
+    # -------------------------------------------------
+    # Restrict refposes (order preserved)
+    # -------------------------------------------------
+    new_refposes = [refposes[i] for i in kept]
+
+    # -------------------------------------------------
+    # Remap chromosome lengths (geometry only)
+    # -------------------------------------------------
+    length_of_chromosomes_remapped = {}
+    for chr_idx in kept:
+        chrom = chrom_keys[chr_idx]
+        _, _, L = length_of_chromosomes[chrom]
+
+        start = chrom_offsets[chr_idx]
+        end = start + L
+        length_of_chromosomes_remapped[chrom] = (start, end, L)
+
+    """# -------------------------------------------------
+    # DEBUG: verify coordinate system of bed_info
     # -------------------------------------------------
     if bed_info is not None:
-        outer_radius = radius + (0.035 if heatmap is not None else 0.015)
+        print("\nDEBUG bed_info coordinate check:")
+        for chr_idx in kept:
+            bed_key = chr_idx + 1
+            if bed_key not in bed_info:
+                continue
 
-        for _, positions in bed_info.items():
-            for label, position in positions:
-                angle = start_angle_offset + 360 - available_angle * position / max_position
-                ang_rad = np.deg2rad(angle)
+            chrom = chrom_keys[chr_idx]
+            g0, g1, L = length_of_chromosomes[chrom]
 
-                base = center + outer_radius * np.array(
-                    [np.cos(ang_rad), np.sin(ang_rad)]
-                )
-                text_pos = base + 0.006 * np.array(
-                    [np.cos(ang_rad), np.sin(ang_rad)]
-                )
+            positions = [pos for (_, pos) in bed_info[bed_key]]
+            if not positions:
+                continue
 
-                ax.text(
-                    text_pos[0],
-                    text_pos[1],
-                    str(int(label)),
-                    ha="left",
-                    va="center",
-                    fontsize=6,
-                    rotation=angle,
-                    rotation_mode="anchor",
-                )
+            print(
+                f"  {chrom}:",
+                f"g0={g0}, g1={g1}, L={L},",
+                f"min(pos)={min(positions)},",
+                f"max(pos)={max(positions)}"
+            )"""
 
-                line_start = base - 0.01 * np.array(
-                    [np.cos(ang_rad), np.sin(ang_rad)]
-                )
-                line_end   = line_start + 0.01 * np.array(
-                    [np.cos(ang_rad), np.sin(ang_rad)]
-                )
+    
+    # -------------------------------------------------
+    # Remap bed_info (outer ticks) — GLOBAL → PACKED
+    # -------------------------------------------------
+    new_bed = None
+    if bed_info is not None:
+        new_bed = {}
 
-                ax.plot(
-                    [line_start[0], line_end[0]],
-                    [line_start[1], line_end[1]],
-                    color="black",
-                    linewidth=0.5,
-                )
+        for chr_idx in kept:
+            bed_key = chr_idx + 1  # iris-style 1-based indexing
+            if bed_key not in bed_info:
+                continue
+
+            chrom = chrom_keys[chr_idx]
+            chrom_start, _, _ = length_of_chromosomes[chrom]
+            offset = chrom_offsets[chr_idx]
+
+            positions = []
+            for label, pos in bed_info[bed_key]:
+                # pos is GLOBAL; convert to chromosome-local then pack
+                pos2 = offset + (pos - chrom_start)
+                positions.append((label, pos2))
+
+            if positions:
+                new_bed[chrom] = positions
+
+
+    return (
+        new_input_data,
+        new_refposes,
+        length_of_chromosomes_remapped,
+        new_bed,
+    )
+
+def _OLDrestrict_chromosomes(
+    *,
+    input_data,
+    refposes,
+    length_of_chromosomes,
+    bed_info=None,
+    chrom_indices=None,
+):
+    """
+    Restrict genome-wide iris-plot or long-plot inputs to a subset of chromosomes,
+    remapping genomic coordinates into a concatenated space.
+
+    IMPORTANT invariants:
+      - Original chromosome keys are NEVER renamed.
+      - Chr_Nickname is NOT applied here.
+      - length_of_chromosomes is NOT overwritten.
+    """
+
+    if chrom_indices is None:
+        return (
+            input_data,
+            refposes,
+            length_of_chromosomes,
+            bed_info,
+        )
+
+    if length_of_chromosomes is None:
+        raise ValueError(
+            "chrom_indices requires length_of_chromosomes"
+        )
 
     # -------------------------------------------------
-    # Ring (individual) labels
+    # Validate chromosome indices
     # -------------------------------------------------
-    if names is not None and len(names) == number_of_rings:
-        for i, name in enumerate(names):
-            ring_radius = radius - (i + 0.5) * ring_width
-            label_xy = center + ring_radius * np.array([0, 1])
+    chrom_keys = list(length_of_chromosomes.keys())
+    n_chr = len(chrom_keys)
 
-            ax.text(
-                label_xy[0],
-                label_xy[1],
-                name,
-                ha="right",
-                va="center",
-                fontsize=4,
-            )
-
-    # -------------------------------------------------
-    # PURE coordinate formatter (browsing)
-    # -------------------------------------------------
-    def iris_format_coord(x, y):
-        # Explicit fallback text (ipympl-safe)
-#        fallback = f"(X,Y) = ({x:.3f}, {y:.3f})"
-        fallback = " " * 40
-    
-        dx = x - center[0]
-        dy = y - center[1]
-        r = np.hypot(dx, dy)
-    
-        # Outside wheel or inside centre hole
-        if r < wd.center_radius or r > radius:
-            return fallback
-    
-        # Angle, clockwise from vertical
-        angle = (np.degrees(np.arctan2(dy, dx)) + 360) % 360
-        rel_angle = (start_angle_offset + 360 - angle) % 360
-    
-        # Cutout region
-        if rel_angle > available_angle:
-            return fallback
-    
-        # Raw genomic position
-        raw_genomic_pos = rel_angle / available_angle * max_position
-    
-        # Chromosome lookup
-        chrom_label = None
-        for chrom_idx, (chrom, start, end) in enumerate(chrom_ranges):
-            if start <= raw_genomic_pos < end:
-                chrom_label = chrom
-                raw_chrom_fraction = (raw_genomic_pos - start)/(end-start)
-#                refpos_idx = round(raw_chrom_fraction * (len(refposes[chrom_idx])-1))
-                refpos_idx = int(
-                    np.clip(
-                        round(raw_chrom_fraction * (len(refposes[chrom_idx]) - 1)),
-                        0,
-                        len(refposes[chrom_idx]) - 1
-                    )
-                )
-                genomic_pos = refposes[chrom_idx][refpos_idx]
-                break
-    
-        if chrom_label is None:
-            return fallback
-    
-        # Ring (sample) lookup
-        ring_idx = int((radius - r) / ring_width)
-        if ring_idx < 0 or ring_idx >= number_of_rings:
-            return fallback
-
-        if names is None:
-            sample = f"ring {ring_idx}"
+    kept = []
+    rejected = []
+    for ci in chrom_indices:
+        if isinstance(ci, (int, np.integer)) and 0 <= int(ci) < n_chr:
+            kept.append(int(ci))
         else:
-            sample = names[ring_idx] 
-    
-        return f"{chrom_label}   bp={int(genomic_pos):,}   sample={sample}"
-    
-    ax.format_coord = iris_format_coord
+            rejected.append(ci)
 
-    plt.show()
+    if rejected:
+        print("restrict_chromosomes: rejected chromosome indices:", rejected)
+
+    if not kept:
+        raise ValueError("restrict_chromosomes: no valid chromosome indices.")
+
+    kept = sorted(kept)
+
+    # -------------------------------------------------
+    # Build old → new chromosome spans
+    # -------------------------------------------------
+    new_spans = []
+    cum = 0.0
+
+    for old_idx in kept:
+        chrom = chrom_keys[old_idx]
+        old_start, old_end, _len = length_of_chromosomes[chrom]
+        L = old_end - old_start
+
+        new_start = cum
+        new_end = cum + L
+        cum = new_end
+
+        new_spans.append(
+            (chrom, old_start, old_end, new_start, new_end, old_idx)
+        )
+
+    # -------------------------------------------------
+    # Remap input_data (rings)
+    # -------------------------------------------------
+    new_input_data = []
 
 
-def diemIrisFromPlotPrep(prepped):
+
+    for ring in input_data:
+        new_ring = []
+
+        for weights, s, e in ring:
+            # Split this segment across ALL overlapping chromosomes
+            for chrom, old_s, old_e, new_s, new_e, _old_idx in new_spans:
+                # intersection of [s,e) with [old_s,old_e)
+                ss = max(s, old_s)
+                ee = min(e, old_e)
+
+                if ee <= ss:
+                    continue  # no overlap with this chromosome
+
+                # remap into packed coordinates
+                ss2 = new_s + (ss - old_s)
+                ee2 = new_s + (ee - old_s)
+
+                new_ring.append((weights, ss2, ee2))
+
+        # Ensure ring reaches the end of the packed genome
+        if new_ring:
+            w, s_last, e_last = new_ring[-1]
+            if e_last < cum:
+                new_ring.append((w, e_last, cum))
+
+        new_input_data.append(new_ring)
+
+
+    # -------------------------------------------------
+    # Restrict refposes (order preserved)
+    # -------------------------------------------------
+    new_refposes = [refposes[i] for i in kept]
+
+    # -------------------------------------------------
+    # Remap chromosome lengths (geometry only)
+    # -------------------------------------------------
+    length_of_chromosomes_remapped = {}
+    for chrom, old_s, old_e, new_s, new_e, _old_idx in new_spans:
+        _len = length_of_chromosomes[chrom][2]
+        length_of_chromosomes_remapped[chrom] = (new_s, new_e, _len)
+
+    # -------------------------------------------------
+    # Remap bed_info (outer ticks)
+    # -------------------------------------------------
+    new_bed = None
+    if bed_info is not None:
+        new_bed = {}
+
+        for chrom, old_s, old_e, new_s, new_e, _old_idx in new_spans:
+            #if chrom not in bed_info:
+            #    continue
+            # bed_info is keyed by chromosome index (1-based or 0-based)
+            bed_key = _old_idx + 1  # if bed_info uses 1-based indexing
+
+            if bed_key not in bed_info:
+                continue
+
+
+            positions = []
+            for label, pos in bed_info[bed_key]:# was chrom not bed_key
+                if old_s <= pos <= old_e:
+                    pos2 = new_s + (pos - old_s)
+                    positions.append((label, pos2))
+
+            if positions:
+                new_bed[chrom] = positions
+
+    return (
+        new_input_data,
+        new_refposes,
+        length_of_chromosomes_remapped,
+        new_bed,
+    )
+
+
+
+"""________________________________________ END Iris and Long helper function ___________________"""
+
+
+
+def diemIrisFromPlotPrep(prepped, chrom_indices=None):
+    """
+    Uses per-chromosome diemDITgenomes_ordered as the canonical form.
+
+    - If chrom_indices is None:
+        flatten to whole-genome rings for WheelDiagram
+    - If chrom_indices is provided:
+        pass per-chromosome structure through unchanged
+        (_restrict_chromosomes will select + pack)
+    """
+
+    if chrom_indices is None:
+        # Whole-genome plot → flatten for WheelDiagram
+        input_data = [
+            flatten_ring_with_offsets(
+                ring,
+                prepped.length_of_chromosomes
+            )
+            for ring in prepped.diemDITgenomes_ordered
+        ]
+    else:
+        # Chromosome-restricted plot → MUST stay per-chromosome
+        input_data = prepped.diemDITgenomes_ordered
+
     diemIrisPlot(
-    title = prepped.diemPlotLabel,
-    input_data = prepped.diemDITgenomes_ordered,
-    refposes = prepped.DIfilteredBED_formatted,
-    names = prepped.ind_ids,
-    bed_info = prepped.iris_plot_prep,
-    length_of_chromosomes=prepped.length_of_chromosomes
-)
+        title=prepped.diemPlotLabel,
+        input_data=input_data,
+        refposes=prepped.DIfilteredBED_formatted,
+        names=prepped.ind_ids,
+        bed_info=prepped.iris_plot_prep,
+        length_of_chromosomes=prepped.length_of_chromosomes,
+        chrom_indices=chrom_indices,
+    )
+
 """________________________________________ END DiemIris ___________________"""
 
 
@@ -3122,85 +3650,77 @@ class BrickDiagram:
         )
 
 
-def diemLongPlot(
+
+
+
+
+def diemLongFromPlotPrep(prepped, chrom_indices=None):
+    """
+    Uses per-chromosome diemDITgenomes_ordered as the canonical form.
+
+    - If chrom_indices is None:
+        flatten to whole-genome rings for WheelDiagram
+    - If chrom_indices is provided:
+        pass per-chromosome structure through unchanged
+        (_restrict_chromosomes will select + pack)
+    """
+
+    if chrom_indices is None:
+        # Whole-genome plot → flatten for WheelDiagram
+        input_data = [
+            flatten_ring_with_offsets(
+                ring,
+                prepped.length_of_chromosomes
+            )
+            for ring in prepped.diemDITgenomes_ordered
+        ]
+    else:
+        # Chromosome-restricted plot → MUST stay per-chromosome
+        input_data = prepped.diemDITgenomes_ordered
+
+    diemLongPlot(
+        title=prepped.diemPlotLabel,
+        input_data=input_data,
+        refposes=prepped.DIfilteredBED_formatted,
+        names=prepped.ind_ids,
+        bed_info=prepped.iris_plot_prep,
+        length_of_chromosomes=prepped.length_of_chromosomes,
+        chrom_indices=chrom_indices,
+    )
+
+
+"""________________________________________ END diemLongPlot ___________________"""
+
+
+def diemIrisPlot(
     input_data,
     refposes,
-    chrom_indices,
     title=None,
     names=None,
+    bed_info=None,
     length_of_chromosomes=None,
+    heatmap=None,
+    chrom_indices=None,   # optional (same as long)
+    show_outer_ticks=True,
 ):
-    """
-    Linear analogue of diemIrisPlot.
-
-    IMPORTANT SEMANTICS:
-      - input_data ring intervals (start,end) are GLOBAL positions along the concatenated genome.
-      - length_of_chromosomes defines GLOBAL [start,end) ranges for each chromosome in that same coordinate system.
-      - chrom_indices selects which chromosomes to plot, and we pack them contiguously with no gaps.
-    """
-    if length_of_chromosomes is None:
-        raise ValueError("diemLongPlot: length_of_chromosomes is required for chromosome selection/packing.")
-
-    # -------------------------------------------------
-    # Build stable chromosome list in the same order used elsewhere
-    # -------------------------------------------------
-    chrom_items = list(length_of_chromosomes.items())  # preserves insertion order
-
-    max_idx = len(chrom_items) - 1
-    chrom_indices = [int(i) for i in chrom_indices if 0 <= int(i) <= max_idx]
-    if not chrom_indices:
-        raise ValueError("diemLongPlot: chrom_indices contained no valid indices.")
-
-    # Selected chromosome global ranges and packed ranges
-    # store: (orig_idx, label, g0, g1, p0, p1)
-    selected = []
-    packed_cursor = 0.0
-
-    for orig_idx in chrom_indices:
-        chrom_name, v = chrom_items[orig_idx]
-        #g0, g1 = _unpack_chrom_range(v)
-        # robust unpack: supports (start,end) or (start,end,length)
-        if len(v) == 2:
-            g0, g1 = v
-        elif len(v) >= 3:
-            g0, g1 = v[0], v[1]
-        else:
-            raise ValueError(f"Unexpected chromosome range value: {v!r}")
-
-        g_len = g1 - g0
-        if g_len <= 0:
-            continue
-
-        label = Chr_Nickname(chrom_name)  # your existing helper
-        p0 = packed_cursor
-        p1 = packed_cursor + g_len
-        selected.append((orig_idx, label, float(g0), float(g1), float(p0), float(p1)))
-        packed_cursor = p1
-
-    if not selected:
-        raise ValueError("diemLongPlot: selected chromosomes have no positive lengths.")
-
-    packed_len = selected[-1][5]
-
     # -------------------------------------------------
     # Figure & axes
     # -------------------------------------------------
-    n_rings = len(input_data)
-    fig, ax = plt.subplots(figsize=(11, 4))  # <- GenomeSummaryPlot-like ratio
-    fig.subplots_adjust(
-        left=0.06,
-        right=0.98,
-        bottom=0.18,
-        top=0.92,
-    )
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.98)
 
     if title is not None:
-        ax.set_title(title)
+        ax.set_title(title, pad=20)
 
-    ax.set_xlim(0, packed_len)
-    ax.set_ylim(-0.9, n_rings)  # room for chromosome bricks + labels
+    # Move axes DOWN to make room for title (no resizing distortion)
+    pos = ax.get_position()
+    ax.set_position([pos.x0, pos.y0, pos.width, pos.height * 0.96])
 
-    ax.set_aspect("auto")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    # keep wheel circular regardless of margins
+    ax.set_box_aspect(1)
 
     ax.set_xticks([])
     ax.set_yticks([])
@@ -3208,17 +3728,326 @@ def diemLongPlot(
         spine.set_visible(False)
 
     # -------------------------------------------------
-    # Draw rings as bricks (global->packed, with intersection)
+    # Chromosome restriction (shared helper)
     # -------------------------------------------------
-    # colours as in iris
+    (
+        input_data,
+        refposes,
+        length_of_chromosomes_remapped,
+        bed_info_remapped,
+    ) = _restrict_chromosomes(
+        input_data=input_data,
+        refposes=refposes,
+        length_of_chromosomes=length_of_chromosomes,
+        bed_info=bed_info,
+        chrom_indices=chrom_indices,
+    )
+
+    # -------------------------------------------------
+    # Wheel geometry
+    # -------------------------------------------------
+    center = np.array((0.5, 0.5))
+    radius = 0.48
+    cutout_angle = 20
+    number_of_rings = len(input_data)
+
+    wd = WheelDiagram(
+        ax,
+        center,
+        radius,
+        number_of_rings + (1 if heatmap is not None else 0),
+        cutout_angle=cutout_angle,
+    )
+
+    if heatmap is not None:
+        wd.add_heatmap_ring(heatmap)
+
+    """# DEBUG: verify global coordinate invariant
+    if input_data:
+        ring0 = input_data[0]
+        print("DEBUG GLOBAL CHECK (iris):")
+        print("  number of segments:", len(ring0))
+        print("  first segment:", ring0[0])
+        print("  last segment:", ring0[-1])
+        print("  last end coordinate:", ring0[-1][2])
+
+    # DEBUG: are wedge boundaries shared?
+        ends = [seg[2] for seg in ring0]
+        print("DEBUG unique end coords (first 20):", sorted(set(ends))[:20])
+
+        print("DEBUG ring identity check:")
+        print("  ring ids:", [id(r) for r in input_data[:5]])
+        print("  first segment ids:", [id(r[0]) for r in input_data[:5]])
+        print("  first segment values:", [r[0] for r in input_data[:5]])"""
+
+    for ring in input_data:
+        wd.add_ring(ring)
+
+    wd.clear_center()
+
+    # -------------------------------------------------
+    # Geometry helpers
+    # -------------------------------------------------
+    available_angle = 360 - cutout_angle
+    start_angle_offset = 90
+
+    if length_of_chromosomes_remapped is not None:
+        max_position = max(end for (_, end, _) in length_of_chromosomes_remapped.values())
+    else:
+        max_position = input_data[0][-1][2]
+
+    ring_width = (radius - wd.center_radius) / number_of_rings
+
+    # -------------------------------------------------
+    # Inner chromosome wedges + labels
+    # -------------------------------------------------
+    chrom_ranges = []
+    if length_of_chromosomes_remapped is not None:
+        for chrom, (start, end, _) in length_of_chromosomes_remapped.items():
+            chrom_ranges.append((chrom, float(start), float(end)))
+
+    if chrom_ranges:
+        for idx, (chrom, start, end) in enumerate(chrom_ranges):
+            start_angle = start_angle_offset + 360 - available_angle * start / max_position
+            end_angle   = start_angle_offset + 360 - available_angle * end   / max_position
+
+            if idx % 2 == 1:
+                ax.add_artist(
+                    Wedge(center, radius / 2, end_angle, start_angle,
+                          color="lightgrey", alpha=0.3)
+                )
+
+            midpoint = 0.5 * (start + end)
+            mid_angle = start_angle_offset + 360 - available_angle * midpoint / max_position
+            mid_rad = np.deg2rad(mid_angle)
+
+            label_xy = center + (radius - 0.28) * np.array([np.cos(mid_rad), np.sin(mid_rad)])
+
+            ax.text(
+                label_xy[0], label_xy[1],
+                Chr_Nickname(chrom),
+                ha="center", va="center",
+                fontsize=8,
+                rotation=mid_angle,
+                rotation_mode="anchor",
+            )
+
+        ax.add_artist(Wedge(center, 0.18, 0, 360, color="white"))
+
+    # -------------------------------------------------
+    # Outer ticks (iris)
+    # -------------------------------------------------
+    if show_outer_ticks and bed_info_remapped is not None:
+        outer_radius = radius + (0.035 if heatmap is not None else 0.015)
+
+        for positions in bed_info_remapped.values():
+            for label, position in positions:
+                position = float(position)
+                angle = start_angle_offset + 360 - available_angle * position / max_position
+                ang_rad = np.deg2rad(angle)
+
+                base = center + outer_radius * np.array([np.cos(ang_rad), np.sin(ang_rad)])
+                text_pos = base + 0.006 * np.array([np.cos(ang_rad), np.sin(ang_rad)])
+
+                ax.text(
+                    text_pos[0], text_pos[1],
+                    str(int(label)),
+                    ha="left", va="center",
+                    fontsize=6,
+                    rotation=angle,
+                    rotation_mode="anchor",
+                )
+
+                line_start = base - 0.01 * np.array([np.cos(ang_rad), np.sin(ang_rad)])
+                line_end   = line_start + 0.01 * np.array([np.cos(ang_rad), np.sin(ang_rad)])
+
+                ax.plot([line_start[0], line_end[0]],
+                        [line_start[1], line_end[1]],
+                        color="black", linewidth=0.5)
+
+    # -------------------------------------------------
+    # Ring labels (optional)
+    # -------------------------------------------------
+    if names is not None and len(names) == number_of_rings:
+        for i, name in enumerate(names):
+            ring_radius = radius - (i + 0.5) * ring_width
+            label_xy = center + ring_radius * np.array([0, 1])
+            ax.text(label_xy[0], label_xy[1], name, ha="right", va="center", fontsize=4)
+
+    # -------------------------------------------------
+    # Hover (make it actually visible)
+    # -------------------------------------------------
+    # Key change: do NOT return all-spaces fallback (looks like “nothing” in some backends).
+    # Use a quiet but visible fallback.
+    fallback = ""
+
+    def iris_format_coord(x, y):
+        dx = x - center[0]
+        dy = y - center[1]
+        r = np.hypot(dx, dy)
+
+        # outside wheel or inside hole
+        if r < wd.center_radius or r > radius:
+            return fallback
+
+        angle = (np.degrees(np.arctan2(dy, dx)) + 360) % 360
+        rel_angle = (start_angle_offset + 360 - angle) % 360
+        if rel_angle > available_angle:
+            return fallback
+
+        raw_pos = rel_angle / available_angle * max_position
+
+        # chromosome lookup
+        chrom_label = None
+        bp = None
+        for chrom_idx, (chrom, start, end) in enumerate(chrom_ranges):
+            if start <= raw_pos < end:
+                frac = (raw_pos - start) / (end - start)
+                ref = refposes[chrom_idx]
+                if len(ref) == 0:
+                    return fallback
+                ref_idx = int(np.clip(round(frac * (len(ref) - 1)), 0, len(ref) - 1))
+                bp = ref[ref_idx]
+                chrom_label = Chr_Nickname(chrom)
+                break
+
+        if chrom_label is None or bp is None:
+            return fallback
+
+        # ring lookup
+        ring_idx = int((radius - r) / ring_width)
+        if ring_idx < 0 or ring_idx >= number_of_rings:
+            return fallback
+
+        sample = names[ring_idx] if (names is not None and len(names) == number_of_rings) else f"ring {ring_idx}"
+        return f"{chrom_label}   bp={int(bp):,}   sample={sample}"
+
+    ax.format_coord = iris_format_coord
+    plt.show()
+
+
+
+
+def diemLongPlot(
+    input_data,
+    refposes,
+    chrom_indices=None,              # NOW OPTIONAL (matches iris)
+    title=None,
+    names=None,
+    bed_info=None,
+    length_of_chromosomes=None,
+    show_outer_ticks=True,
+):
+    """
+    Linear analogue of diemIrisPlot, using BrickDiagram.
+
+    Same semantics as iris:
+      - chrom_indices is optional.
+      - If chrom_indices is provided, chromosomes are remapped into a packed coordinate system.
+      - Hover reports chrom + bp + sample.
+      - Outer ticks are supported (bed_info) and drawn above the rings.
+    """
+
+    if length_of_chromosomes is None:
+        raise ValueError("diemLongPlot: length_of_chromosomes is required.")
+
+    # -------------------------------------------------
+    # Chromosome restriction (shared helper)
+    # -------------------------------------------------
+    (
+        input_data,
+        refposes,
+        length_of_chromosomes_remapped,
+        bed_info_remapped,
+    ) = _restrict_chromosomes(
+        input_data=input_data,
+        refposes=refposes,
+        length_of_chromosomes=length_of_chromosomes,
+        bed_info=bed_info,
+        chrom_indices=chrom_indices,
+    )
+
+    # -------------------------------------------------
+    # Normalize bed_info keys for unrestricted Long plot
+    # -------------------------------------------------
+    if chrom_indices is None and bed_info_remapped is not None:
+        # Convert 1-based BED keys → chromosome-name keys
+        chrom_keys = list(length_of_chromosomes.keys())
+        bed_info_remapped = {
+            chrom_keys[k - 1]: v
+            for k, v in bed_info_remapped.items()
+            if 1 <= k <= len(chrom_keys)
+        }
+
+    """# DEBUG D2: bed_info flow
+    print("DEBUG D2 bed_info flow:")
+    print("  input bed_info:", None if bed_info is None else list(bed_info.keys()))
+    print("  remapped bed_info:", None if bed_info_remapped is None else list(bed_info_remapped.keys()))"""
+
+    # -------------------------------------------------
+    # Packed chromosome ranges
+    # -------------------------------------------------
+    chrom_ranges = []
+    for chrom, v in (length_of_chromosomes_remapped or length_of_chromosomes).items():
+        start, end = float(v[0]), float(v[1])
+        chrom_ranges.append((chrom, start, end))
+
+    if not chrom_ranges:
+        raise ValueError("diemLongPlot: no chromosomes available after restriction.")
+
+    packed_len = max(end for (_, _, end) in chrom_ranges)
+
+    # -------------------------------------------------
+    # Figure & axes
+    # -------------------------------------------------
+    n_rings = len(input_data)
+    fig, ax = plt.subplots(figsize=(11, 4))
+    fig.subplots_adjust(left=0.06, right=0.98, bottom=0.18, top=0.86)
+    """print("DEBUG axes position (long):", ax.get_position())"""
+
+    if title is not None:
+        ax.set_title(title, pad=16)
+    # Move axes DOWN to make room for outer ticks (no geometry distortion)
+    pos = ax.get_position()
+    ax.set_position([pos.x0, pos.y0, pos.width, pos.height * 0.94])
+
+    ax.set_xlim(0, packed_len)
+
+    # Allocate room above rings for outer ticks
+    ax.set_ylim(-0.9, n_rings + 0.7)
+
+    ax.set_aspect("auto")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # -------------------------------------------------
+    # Draw rings as bricks (already packed if chrom_indices was used)
+    # -------------------------------------------------
     colors = np.array(list(map(mcolors.to_rgb, diemColours)))
     bd = BrickDiagram(ax, n_rings, y_min=0, y_max=n_rings)
 
     for ring_idx, ring in enumerate(input_data):
-        for weights, g_start, g_end in ring:
-            g_start = float(g_start-1)  # convert to 0-based SJEB 24 Jan 2026
-            g_end   = float(g_end)
-            if g_end <= g_start:
+        for weights, x0, x1 in ring:
+            """# DEBUG D1: inspect raw brick coordinates
+            if ring_idx == 0:
+                print("DEBUG D1 brick coords:")
+                print("  chrom_indices:", chrom_indices)
+                print("  raw x0, x1:", x0, x1)
+                print("  chrom_ranges:", chrom_ranges[:3])  # first few only"""
+        
+            # conditionally convert 1-based to 0-based
+            if True or chrom_indices is None:
+                # global genome: 1-based → 0-based
+                x0 = float(x0 - 1)
+                x1 = float(x1)
+            else:
+                # already packed by _restrict_chromosomes
+                x0 = float(x0)
+                x1 = float(x1)
+            x1 = float(x1)
+            if x1 <= x0:
                 continue
 
             w = np.asarray(weights)
@@ -3228,39 +4057,99 @@ def diemLongPlot(
             else:
                 blended_rgb = (colors.T * w).sum(axis=1) / tot
 
-            # Intersect this global interval with each selected chrom global range,
-            # then map overlap into packed coords.
-            for (orig_idx, _, cg0, cg1, cp0, _) in selected:
-                o0 = max(g_start, cg0)
-                o1 = min(g_end,   cg1)
-                if o1 <= o0:
-                    continue
-
-                # packed x: cp0 + (global - cg0)
-                x0 = cp0 + (o0 - cg0)
-                x1 = cp0 + (o1 - cg0)
-                bd.add_brick(x0, x1, ring_idx, mcolors.to_hex(blended_rgb))
+            bd.add_brick(x0, x1, ring_idx, mcolors.to_hex(blended_rgb))
 
     # -------------------------------------------------
-    # Chromosome bricks + labels at base (no gaps)
+    # Chromosome bricks + labels at base
     # -------------------------------------------------
-    base_y = -0.62 
-    #base_h = 0.45 * 30
-
-    for i, (_, label, _, _, p0, p1) in enumerate(selected):
-        if i % 2 == 0:
-            ax.axvspan(p0,p1,color="grey", alpha=0.35,ymin=-0.18,ymax=0.01, clip_on=False)
-
+    base_y = -0.62
+    for i, (chrom, p0, p1) in enumerate(chrom_ranges):
+        if i % 2 == 1:
+            ax.axvspan(p0, p1, color="grey", alpha=0.35,
+                       ymin=-0.18, ymax=0.01, clip_on=False)
 
         ax.text(
             0.5 * (p0 + p1),
             base_y - 0.12,
-            label,
+            Chr_Nickname(chrom),
             ha="center",
             va="top",
             fontsize=8,
             rotation=90
         )
+
+    """# -------------------------------------------------
+    # DEBUG: verify bed_info ↔ chrom_ranges consistency
+    # -------------------------------------------------
+    if bed_info_remapped is not None:
+        print("DEBUG bed_info vs chrom_ranges (long):")
+        print("  bed_info_remapped keys:", list(bed_info_remapped.keys()))
+        print("  chrom_ranges keys:", [chrom for chrom, _, _ in chrom_ranges])
+
+        for key, positions in bed_info_remapped.items():
+            xs = [pos for (_, pos) in positions]
+            if not xs:
+                print(f"  {key}: NO POSITIONS")
+                continue
+
+            xmin, xmax = min(xs), max(xs)
+
+            hits = [
+                chrom
+                for chrom, p0, p1 in chrom_ranges
+                if not (xmax < p0 or xmin > p1)
+            ]
+
+            print(
+                f"  {key}: "
+                f"min(pos)={xmin:.2f}, max(pos)={xmax:.2f}, "
+                f"overlaps chrom_ranges={hits}"
+            )"""
+
+    # -------------------------------------------------
+    # Outer ticks (linear analogue of iris outer ticks)
+    # -------------------------------------------------
+    if show_outer_ticks and bed_info_remapped is not None:
+        tick_y0 = n_rings + 0 + 0.05
+        tick_y1 = n_rings + 1 + 0.18
+        text_y  = n_rings + 2 + 0.22
+
+        # NOTE: positions are already packed coords
+        """print("DEBUG tick y positions:",
+            tick_y0, tick_y1, text_y,
+            "ylim:", ax.get_ylim())
+        
+        print("DEBUG outer tick coordinate system check (long):")
+        print("  packed_len:", packed_len)
+        for chrom, positions in bed_info_remapped.items():
+            xs = [pos for (_, pos) in positions]
+            print(
+                f"  {chrom}: "
+                f"min(pos)={min(xs):.2f}, "
+                f"max(pos)={max(xs):.2f}"
+            )
+        print("DEBUG chrom_ranges:")
+        for chrom, p0, p1 in chrom_ranges:
+            print(f"  {chrom}: p0={p0}, p1={p1}")"""
+
+        for chrom, p0, p1 in chrom_ranges:
+            if chrom not in bed_info_remapped:
+                continue
+            for label, pos in bed_info_remapped[chrom]:
+        #for positions in bed_info_remapped.values():
+        #    for label, pos in positions:
+                x = float(pos)
+                ax.plot([x, x], [tick_y0, tick_y1],
+                        color="black", linewidth=0.5, clip_on=False)
+                ax.text(
+                    x, text_y,
+                    str(int(label)),
+                    ha="center",
+                    va="bottom",
+                    fontsize=6,
+                    rotation=90,
+                    clip_on=False
+                )
 
     # -------------------------------------------------
     # Ring labels (optional)
@@ -3279,58 +4168,44 @@ def diemLongPlot(
             )
 
     # -------------------------------------------------
-    # Cursor browsing (packed -> chrom -> refpose)
+    # Hover (same semantics as iris)
     # -------------------------------------------------
-    def long_format_coord(x, y):
-        fallback = " " * 40
+    fallback = ""
 
+    def long_format_coord(x, y):
         # ring index from y
         ring_idx = int(np.floor(n_rings - y))
         if ring_idx < 0 or ring_idx >= n_rings:
             return fallback
 
-        # locate chromosome in packed coords
+        # find chromosome interval in packed coords
         chrom_hit = None
-        for (orig_idx, label, cg0, cg1, p0, p1) in selected:
+        for chrom_i, (chrom, p0, p1) in enumerate(chrom_ranges):
             if p0 <= x < p1:
-                chrom_hit = (orig_idx, label, cg0, cg1, p0, p1)
+                chrom_hit = (chrom_i, chrom, p0, p1)
                 break
         if chrom_hit is None:
             return fallback
 
-        orig_idx, chrom_label, cg0, cg1, p0, p1 = chrom_hit
-
-        # position within chromosome (global coordinate)
-        chrom_len = cg1 - cg0
-        if chrom_len <= 0:
+        chrom_i, chrom, p0, p1 = chrom_hit
+        if p1 <= p0:
             return fallback
 
-        frac = (x - p0) / (p1 - p0)  # in [0,1)
-        # map to refposes for that original chromosome index
-        ref = refposes[orig_idx]
+        frac = (x - p0) / (p1 - p0)
+        ref = refposes[chrom_i]
         if len(ref) == 0:
             return fallback
 
         ref_i = int(np.clip(round(frac * (len(ref) - 1)), 0, len(ref) - 1))
-        genomic_pos = ref[ref_i]
+        bp = ref[ref_i]
 
         sample = names[ring_idx] if (names is not None and len(names) == n_rings) else f"ring {ring_idx}"
-        return f"{chrom_label}   bp={int(genomic_pos):,}   sample={sample}"
+        return f"{Chr_Nickname(chrom)}   bp={int(bp):,}   sample={sample}"
 
     ax.format_coord = long_format_coord
-
     plt.show()
 
-def diemLongFromPlotPrep(prepped, chrom_indices):
-    diemLongPlot(
-        title=prepped.diemPlotLabel,
-        input_data=prepped.diemDITgenomes_ordered,
-        refposes=prepped.DIfilteredBED_formatted,
-        names=prepped.ind_ids,
-        length_of_chromosomes=prepped.length_of_chromosomes,
-        chrom_indices=chrom_indices,
-    ) 
 
 
-"""________________________________________ END diemLongPlot ___________________"""
+
 
