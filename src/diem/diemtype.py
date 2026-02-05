@@ -123,6 +123,10 @@ class DiemType:
     :ivar threshold: float. Threshold value to be set.
     :ivar smoothScale: float. Scale for kernel smoothing, to be set.
     :ivar contigMatrix: np.ndarray dtype=object. Matrix of Contig objects, to be created.
+    :ivar siteExclusionsByChr: List[np.ndarray]. List of arrays of positions indicating which sites to exclude for each chromosome when polarizing.
+    :ivar indExclusions: np.ndarray. Array of names of individuals to exclude when polarizing.
+    :ivar relativeRecRateDict: dict. Dictionary of relative recombination rates by chromosome name.
+
     """
 
     def __init__(self,DMBC, indNames, chrPloidies, chrNames, posByChr,chrLengths,exclusionsByChr=None,indExclusions=None):
@@ -497,10 +501,10 @@ class DiemType:
             a.sort()
             print("new hybrid indices computed and individuals have been resorted by HI")
         else:
-            print("hybrid indices have likely changed, but have not been updated")
-            print("to update HIs without re-sorting, update the attribute a.HIs = a.computeHIs()")
-            print("You may also call the sort() method on the resulting data if you wish to both re-compute and resort")
-        
+            a.HIs = a.computeHIs()
+            print("hybrid indices have been updated")
+            print("but individuals have NOT been resorted by HI.")
+    
         return a
     
     def smooth(self,scale: float ,reSort=False,reSmooth=False,parallel=True):

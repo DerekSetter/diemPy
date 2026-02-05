@@ -33,30 +33,24 @@ diemColors5 = [
     colors.to_hex((255/255, 229/255, 0)),  # RGBColor[255/255, 229/255, 0] - Yellow
     colors.to_hex((0, 128/255, 128/255))   # RGBColor[0, 128/255, 128/255] - Teal
 ]
-bounds5 = [-1.5,-.5,.5,1.5,2.5,3.5]
+bounds5 = [-1.5,-0.5,.5,1.5,2.5,3.5]
 
 
 '''
 Some utility functions for working with the data and results
 '''
 
-# def plot_painting(diemMatrix):
-#     '''
-#      Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.'''
-#     # for a single chromosome in the 'stateMatrixByChromsome'
-#     mycmap = colors.ListedColormap( diemColors4)
-#     bounds = [-.5,.5,1.5,2.5,3.5]
-#     norm = colors.BoundaryNorm(bounds,mycmap.N)
-    
-#     fig, ax = plt.subplots(figsize=(16,4))
-#     ax.pcolormesh(diemMatrix, cmap = mycmap, norm=norm)
-#     ax.set_yticks([])
-#     ax.set_yticklabels([])
-#     plt.show()
 
-def plot_painting(diemMatrix,names=None,thisFigSize = None):
+def plot_painting(diemMatrix,names=None,thisFigSize = None,outputPath=None):
     '''
-     Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.'''
+     Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.
+     
+    Args:
+        diemMatrix: A diem matrix for a single chromosome (element of diemtype.DMBC)
+        names: Optional list of names for each individual (to label y-axis)
+        thisFigSize: Optional tuple specifying figure size (width, height)
+        outputPath: Optional path to save the figure. Extension determines format (e.g., .png, .pdf)
+     '''
     # for a single chromosome in the 'stateMatrixByChromsome'
 
     if thisFigSize is None:
@@ -76,10 +70,14 @@ def plot_painting(diemMatrix,names=None,thisFigSize = None):
         ax.set_yticks([])
         ax.set_yticklabels([])
     
+    if outputPath is not None:
+        plt.savefig(outputPath,bbox_inches='tight')
+
+
     plt.show()
 
 
-def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,thisFigSize = None):
+def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,thisFigSize = None,outputPath=None,names=None):
     '''
     Plot a painting of a diemMatrix with proper spacing based on physical positions,
     showing blank spaces between markers.
@@ -129,8 +127,15 @@ def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,thisFigSiz
         # Plot this marker
         ax.pcolormesh(X_marker, Y_marker, marker_data, cmap=mycmap, norm=norm)
     
-    ax.set_yticks([])
-    ax.set_yticklabels([])
+
+    # Add y-axis labels if names are provided
+    if names is not None:
+        ax.set_yticks(np.arange(len(names)) + 0.5)
+        ax.set_yticklabels(names)
+    else:
+        ax.set_yticks([])
+        ax.set_yticklabels([])
+
     ax.set_xlabel('Position')
     
     # Set x-axis limits to show the full range
@@ -140,10 +145,11 @@ def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,thisFigSiz
     # Format x-axis to show positions in a readable way
     ax.ticklabel_format(style='scientific', axis='x', scilimits=(0,0))
     
+    if outputPath is not None:
+        plt.savefig(outputPath,bbox_inches='tight')
+
     #plt.tight_layout()
     plt.show()
-
-
 
 def characterize_markers(dt):
     '''

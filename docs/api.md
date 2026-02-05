@@ -10,36 +10,48 @@ This is the API
 
 ```{eval-rst}
 .. automodule:: diem.diemtype
-    :members:
-    :undoc-members:
+    :members: save_DiemType, load_DiemType, flip_polarity
+    :exclude-members: DiemType
+
+.. autoclass:: diem.diemtype.DiemType
+   :members: add_relative_recombination_rates,sort,copy,polarize,apply_threshold,smooth,create_contig_matrix,get_intervals_of_state,intervals_to_bed
 ```
+
 
 ## contigs and intervals
 ```{eval-rst}
 .. automodule:: diem.contigs
-    :members:
-    :undoc-members:
+    :members: Interval, Contig, export_contigs_to_ind_bed_files
 ```
 
+<!--
 ## polarization submodule
 ```{eval-rst}
 .. automodule:: diem.polarize
     :members:
-    :undoc-members:
 ```
+-->
 
+<!--
 ## smoothing submodule
 ```{eval-rst}
 .. automodule:: diem.smooth
     :members:
-    :undoc-members:
 ```
+-->
 
+<!--
 ## tests submodule
 ```{eval-rst}
 .. automodule:: diem.tests
     :members:
-    :undoc-members:
+```
+-->
+
+## plots submodule
+```{eval-rst}
+.. automodule:: diem.plots
+    :members:
 ```
 
 This is the end of the API documentation
