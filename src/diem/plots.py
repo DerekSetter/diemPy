@@ -780,6 +780,8 @@ class GenomeSummaryPlot:
         # ---- coordinate display ----
         self._install_format_coord()
 
+        plt.show()
+
     # ---------------- helpers ----------------
 
     def _update_xticks(self):
