@@ -41,25 +41,26 @@ Some utility functions for working with the data and results
 '''
 
 
-def plot_painting(diemMatrix,names=None,thisFigSize = None,outputPath=None):
+def plot_painting(diemMatrix,names=None,figSize = None,outputPath=None):
     '''
      Plot a painting of a diemMatrix. that is, an element of diemtype.DMBC, i.e., a diem matrix for a single chromosome.
      
     Args:
         diemMatrix: A diem matrix for a single chromosome (element of diemtype.DMBC)
         names: Optional list of names for each individual (to label y-axis)
-        thisFigSize: Optional tuple specifying figure size (width, height)
+        figSize: Optional tuple specifying figure size (width, height)
         outputPath: Optional path to save the figure. Extension determines format (e.g., .png, .pdf)
+        names: Optional list of names for each individual (to label y-axis)
      '''
     # for a single chromosome in the 'stateMatrixByChromsome'
 
-    if thisFigSize is None:
-        thisFigSize = (16,4)
+    if figSize is None:
+        figSize = (12,4)
     mycmap = colors.ListedColormap( diemColors4)
     bounds = [-.5,.5,1.5,2.5,3.5]
     norm = colors.BoundaryNorm(bounds,mycmap.N)
     
-    fig, ax = plt.subplots(figsize=thisFigSize)
+    fig, ax = plt.subplots(figsize=figSize)
     ax.pcolormesh(diemMatrix, cmap = mycmap, norm=norm)
     
     if names is not None:
@@ -77,7 +78,7 @@ def plot_painting(diemMatrix,names=None,thisFigSize = None,outputPath=None):
     plt.show()
 
 
-def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,thisFigSize = None,outputPath=None,names=None):
+def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,figSize = None,outputPath=None,names=None):
     '''
     Plot a painting of a diemMatrix with proper spacing based on physical positions,
     showing blank spaces between markers.
@@ -86,16 +87,19 @@ def plot_painting_with_positions(diemMatrix, positions,markerWidth=25,thisFigSiz
         diemMatrix: A diem matrix for a single chromosome (element of diemtype.DMBC)
         positions: Array of physical positions for each marker (element of diemtype.posByChr)
         markerWidth: Half-width of each marker's visual representation (in base pairs)
+        figSize: Optional tuple specifying figure size (width, height)
+        outputPath: Optional path to save the figure. Extension determines format (e.g., .png, .pdf)
+        names: Optional list of names for each individual (to label y-axis
     '''
     # for a single chromosome in the 'stateMatrixByChromsome'
 
-    if thisFigSize is None:
-        thisFigSize = (16,4)
+    if figSize is None:
+        figSize = (12,4)
     mycmap = colors.ListedColormap(diemColors4)
     bounds = [-.5,.5,1.5,2.5,3.5]
     norm = colors.BoundaryNorm(bounds,mycmap.N)
     
-    fig, ax = plt.subplots(figsize=thisFigSize)
+    fig, ax = plt.subplots(figsize=figSize)
     
     # Each marker gets a narrow bin (2 bp wide: 1 bp left and right of position)
     # Gaps between markers will show as blank space
