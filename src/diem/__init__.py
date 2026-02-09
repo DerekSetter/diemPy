@@ -31,7 +31,7 @@ from . import plots
 # I/O functions
 from .io import read_diem_bed
 from .io import write_polarized_bed
-from .io import update_ploidy
+from .io import update_meta
 
 # DiemType object handling
 from .diemtype import save_DiemType
