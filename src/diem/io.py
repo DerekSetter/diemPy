@@ -22,12 +22,13 @@ def read_diem_bed(bed_file_path, meta_file_path):
     df_meta = pd.read_csv(meta_file_path, sep='\t')
     chrNames = np.array(df_meta['#Chrom'].values)
     chrLengths = np.array(df_meta['RefEnd0'].values) - np.array(df_meta['RefStart0'].values)
-    sampleNames = np.array(df_meta.columns[6:])
+    chrRecRates = np.array(df_meta['relativeRecRates'].values)
+    sampleNames = np.array(df_meta.columns[7:])
     
     ploidyByChr = []
     for chr in chrNames:
         row = df_meta[df_meta['#Chrom'] == chr]
-        ploidy = np.array(row.iloc[0,6:].values, dtype=int)
+        ploidy = np.array(row.iloc[0,7:].values, dtype=int)
         ploidyByChr.append(ploidy)
     
     # Fast preamble reading - same as before
@@ -129,12 +130,13 @@ def read_diem_bed(bed_file_path, meta_file_path):
     # Create DiemType object
     d = dt.DiemType(DMBC, sampleNames, ploidyByChr, chrNames, positionByChr, chrLengths)
     d.indExclusions = individualsMasked
-    
+    d.relativeRecRateDict = dict(zip(chrNames, chrRecRates))
     if hasPolarity:
         d.PolByChr = polarityByChr
         d.DIByChr = DIByChr
         d.SupportByChr = supportByChr
         d.initialPolByChr = initialPolByChr
+       
         
         if allExclusionsAreNone:
             d.siteExclusionsByChr = None
@@ -213,6 +215,120 @@ def write_polarized_bed(inputFilePath, outputFilePath, diemTypeObj):
                 row_idx += 1
 
 
+def update_meta(metaFilePathIn, metaFilePathOut,ploidyFilePath=None, recFilePath = None):
+    """
+    Docstring for update_meta
+    
+    :param metaFilePathIn: Description
+    :param metaFilePathOut: Description
+    :param ploidyFilePath: Description
+    :param recFilePath: Description
+    """
+    if ploidyFilePath is None and recFilePath is None:
+        raise ValueError("At least one of ploidyFilePath or recFilePath must be provided.")
+    
+    # Read metadata
+    df_meta = pd.read_csv(metaFilePathIn, sep='\t')
+
+    # Read ploidy data
+    if ploidyFilePath is not None:
+
+        print('udpating ploidy information from file: ' + ploidyFilePath)
+
+        df_ploidy = pd.read_csv(ploidyFilePath, sep='\t', header=0)
+        individual_col = df_ploidy.columns[0]  # Individual names column
+
+        # Initialize tracking sets
+        chromosomes_not_in_meta = set()
+        individuals_not_in_meta = set()
+        individuals_not_in_ploidy = set()
+        
+        # Get sets for comparison
+        meta_chromosomes = set(df_meta['#Chrom'])
+        meta_individuals = set(df_meta.columns[7:])
+        ploidy_individuals = set(df_ploidy[individual_col])
+        ploidy_chromosomes = set(df_ploidy.columns[1:])
+
+        # Check for individuals not in ploidy file
+        individuals_not_in_ploidy = meta_individuals - ploidy_individuals
+        individuals_not_in_meta = ploidy_individuals - meta_individuals
+
+        
+        # For each chromosome column in the ploidy file (except the individual names column)
+        for chrom_col in df_ploidy.columns[1:]:
+
+            if chrom_col not in meta_chromosomes:
+                chromosomes_not_in_meta.add(chrom_col)
+                continue
+
+            # Create ploidy dictionary for this chromosome
+            ploidy_dict = dict(zip(df_ploidy[individual_col], df_ploidy[chrom_col]))
+            
+            # Find the row for this chromosome in metadata
+            target_row_mask = df_meta['#Chrom'] == chrom_col
+            
+            # Update ploidy for each individual
+            for individual in df_meta.columns[7:]:
+                if individual in ploidy_dict:
+                    df_meta.loc[target_row_mask, individual] = ploidy_dict[individual]
+                # Note: individuals not in ploidy file are already tracked above
+            
+            print(f"Updated ploidy for {chrom_col}")
+
+        # Report any issues found
+        if chromosomes_not_in_meta:
+            print(f"\nWarning: The following chromosomes from the ploidy file were not found in the metadata file: {sorted(chromosomes_not_in_meta)}")
+            print("No ploidy updates were made for these chromosomes")
+        if individuals_not_in_meta:
+            print(f"\nWarning: The following individuals from the ploidy file were not found in the metadata file: {sorted(individuals_not_in_meta)}")
+            print("No ploidy updates were made for these individuals")
+        if individuals_not_in_ploidy:
+            print(f"\nWarning: The following individuals from the metadata file were not found in the ploidy file: {sorted(individuals_not_in_ploidy)}")
+            print("The ploidy for these individuals remains diploid for all chromosomes (the default value)")
+        # Summary
+        if not (chromosomes_not_in_meta or individuals_not_in_meta or individuals_not_in_ploidy):
+            print("\nAll chromosomes and individuals matched successfully.")
+        else:
+            print("\nPloidy update completed with warnings as noted above. Please review your data before proceeding!!!")
+ 
+        print('done updating ploidy information\n')
+    print()
+
+
+    if recFilePath is not None:
+
+        print('udpating recombination rate information from file: ' + recFilePath+'\n')
+
+        # Read recombination rate data
+        df_rec = pd.read_csv(recFilePath, sep='\t', header=0)
+        rec_dict = dict(zip(df_rec['chromosome'], df_rec['relative_rate']))
+        
+
+        
+        notInRecFile = set(df_meta['#Chrom']) - set(rec_dict.keys())
+        if notInRecFile:
+            print(f"Note: The following chromosomes from metadata were not found in the recombination rate file and were not updated:\n {sorted(notInRecFile)}")
+
+        notInMetaFile = set(rec_dict.keys()) - set(df_meta['#Chrom'])
+        if notInMetaFile:
+            print(f"Note: The following chromosomes from the recombination rate file were not found in the metadata file:\n {sorted(notInMetaFile)}")
+
+        print('\nthe following chromosomes were updated with new recombination rates:')
+        # Update relativeRecRates in metadata
+        for chrom in df_meta['#Chrom']:
+            if chrom in rec_dict:
+                print(f"\t{chrom}: {rec_dict[chrom]}")
+                df_meta.loc[df_meta['#Chrom'] == chrom, 'relativeRecRates'] = rec_dict[chrom]
+
+        # Write updated metadata to output file
+        df_meta.to_csv(metaFilePathOut, sep='\t', index=False)
+        print(f"\n done updating recobination rates")
+
+    print(f"\nUpdated metadata saved to {metaFilePathOut}")
+
+
+
+
     # Alternative version if you want to handle multiple chromosomes
 def update_ploidy(ploidyFilePath, metaFilePathIn, metaFilePathOut):
     """
@@ -235,7 +351,7 @@ def update_ploidy(ploidyFilePath, metaFilePathIn, metaFilePathOut):
     
     # Get sets for comparison
     meta_chromosomes = set(df_meta['#Chrom'])
-    meta_individuals = set(df_meta.columns[6:])
+    meta_individuals = set(df_meta.columns[7:])
     ploidy_individuals = set(df_ploidy[individual_col])
     ploidy_chromosomes = set(df_ploidy.columns[1:])
 
@@ -258,7 +374,7 @@ def update_ploidy(ploidyFilePath, metaFilePathIn, metaFilePathOut):
         target_row_mask = df_meta['#Chrom'] == chrom_col
         
         # Update ploidy for each individual
-        for individual in df_meta.columns[6:]:
+        for individual in df_meta.columns[7:]:
             if individual in ploidy_dict:
                 df_meta.loc[target_row_mask, individual] = ploidy_dict[individual]
             # Note: individuals not in ploidy file are already tracked above

@@ -233,35 +233,6 @@ class DiemType:
             if self.initialPolByChr is None:
                 self.initialPolByChr = [None]*len(self.chrNames)
             self.initialPolByChr[idx] = thisChrPolarity
-
-    def add_relative_recombination_rates(self,filePath):
-        '''
-        Adds relative recombination rates from a file to the DiemType instance.
-
-        :param self: DiemType instance  
-        :param filePath: str, path to the relative recombination rate file
-
-        :return: None
-
-        '''
-
-        df = pd.read_csv(filePath,header=0,sep='\t')
-        # assumes headers are 'chromosome' and 'relative_rate'
-        #initially set all chromsomes to have relative rate of 1.0
-        for chrName in self.chrNames:
-            if self.relativeRecRateDict is None:
-                self.relativeRecRateDict = {}
-            self.relativeRecRateDict[chrName] = 1.0
-
-        # update any chromosomes with specified rates (relative to 1.0)
-
-        for idx, row in df.iterrows():
-            chrName = row['chromosome']
-            rate = row['relative_rate']
-            if chrName in self.relativeRecRateDict:
-                self.relativeRecRateDict[chrName] = rate
-            else:
-                print("warning: chromosome ",chrName," in relative recombination rate file not found in DiemType instance. skipping this entry.")
            
     def computeHIs(self,force=False):
         """
