@@ -352,6 +352,7 @@ def read_diem_bed_4_plots(bed_file_path, meta_file_path):
     # Read metadata - no changes needed here as it's already fast
     df_meta = pd.read_csv(meta_file_path, sep='\t')
     chrNames = np.array(df_meta['#Chrom'].values)
+    chrRelativeRecRates = np.array(df_meta['relativeRecRates'].values)
     chrLengths = np.array(df_meta['RefEnd0'].values) - np.array(df_meta['RefStart0'].values)
     sampleNames = np.array(df_meta.columns[6:])
     
@@ -406,7 +407,7 @@ def read_diem_bed_4_plots(bed_file_path, meta_file_path):
         mask = df_bed['polarity'] == 1
         df_bed.loc[mask, 'diem_genotype'] = df_bed.loc[mask, 'diem_genotype'].apply(StringReplace20)
         
-    return df_bed,sampleNames,chrLengths
+    return df_bed,sampleNames,chrLengths,chrRelativeRecRates
 
 
 def get_DI_span(aDT):
@@ -779,6 +780,8 @@ class GenomeSummaryPlot:
         
         # ---- coordinate display ----
         self._install_format_coord()
+
+        plt.show()
 
     # ---------------- helpers ----------------
 
@@ -2669,7 +2672,7 @@ class DiemPlotPrep:
         ticks: Optional ticks for plotting.
         smooth: Optional smoothing parameter.
     """
-    def __init__(self, plot_theme, ind_ids, chrRefLengths, polarised_data, di_threshold, di_column, diemStringPyCol, genome_pixels, ticks=None, smooth=None):
+    def __init__(self, plot_theme, ind_ids, chrRefLengths, chrRelativeRecRates,polarised_data, di_threshold, di_column, diemStringPyCol, genome_pixels, ticks=None, smooth=None):
         self.polarised_data = polarised_data
         self.di_threshold = di_threshold
         self.di_column = di_column
@@ -2678,6 +2681,7 @@ class DiemPlotPrep:
         self.plot_theme = plot_theme
         self.ind_ids = ind_ids
         self.chrRefLengths = chrRefLengths
+        self.chrRelativeRecRates=chrRelativeRecRates
         self.ticks = ticks
         self.smooth = smooth
 
@@ -2853,7 +2857,7 @@ class DiemPlotPrep:
         # --------------------------------------------------
         smoothed_scaffold_haplotypes = {}
     
-        for scaffold, haplos in scaffold_haplotypes.items():
+        """for scaffold, haplos in scaffold_haplotypes.items():
             haplo_matrix = np.vstack(haplos)
     
             smoothed = smooth.laplace_smooth_multiple_haplotypes(  # WAS diem.smooth
@@ -2862,7 +2866,33 @@ class DiemPlotPrep:
                 scale
             )
     
+            smoothed_scaffold_haplotypes[scaffold] = smoothed"""
+        for chr_i, scaffold in enumerate(self.chrom_keys):
+            haplos = scaffold_haplotypes[scaffold]
+            haplo_matrix = np.vstack(haplos)
+
+            rec_rate = self.chrRelativeRecRates[chr_i]
+
+            if rec_rate <= 0:
+                raise ValueError(
+                    f"Invalid recombination rate for {scaffold}: {rec_rate}"
+                )
+
+            effective_scale = scale / rec_rate
+
+            print(
+                f"Smoothing {scaffold}: scale={scale:.3g}, "
+                f"recRate={rec_rate:.3g}, effective={effective_scale:.3g}"
+            )
+
+            smoothed = smooth.laplace_smooth_multiple_haplotypes(
+                scaffold_arrays[scaffold],
+                haplo_matrix,
+                effective_scale
+            )
+
             smoothed_scaffold_haplotypes[scaffold] = smoothed
+
     
         # --------------------------------------------------
         # 5. Reassemble genomes (string form)
@@ -3108,12 +3138,13 @@ def flatten_ring_with_offsets(per_chr_ring, length_of_chromosomes):
 
 def diemPlotPrepFromBedMeta(plot_theme, bed_file_path, meta_file_path,di_threshold,genome_pixels,ticks, smooth = None):
 
-    pzbed, bmIndIDs, chrRefLengths = read_diem_bed_4_plots(bed_file_path, meta_file_path)
+    pzbed, bmIndIDs, chrRefLengths, chrRelativeRecRates = read_diem_bed_4_plots(bed_file_path, meta_file_path)
 
     prep = DiemPlotPrep(
         plot_theme=plot_theme,
         ind_ids=bmIndIDs,
         chrRefLengths=chrRefLengths,
+        chrRelativeRecRates=chrRelativeRecRates,
         polarised_data=pzbed,
         di_threshold=di_threshold,
         diemStringPyCol=10,
