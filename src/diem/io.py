@@ -217,12 +217,17 @@ def write_polarized_bed(inputFilePath, outputFilePath, diemTypeObj):
 
 def update_meta(metaFilePathIn, metaFilePathOut,ploidyFilePath=None, recFilePath = None):
     """
-    Docstring for update_meta
-    
-    :param metaFilePathIn: Description
-    :param metaFilePathOut: Description
-    :param ploidyFilePath: Description
-    :param recFilePath: Description
+
+    Update metadata file with new ploidy and/or recombination rate information.
+
+    Parameters:
+        :param metaFilePathIn: input metadata file path (original metadata file)
+        :param metaFilePathOut: output metadata file path (updated metadata file)
+        :param ploidyFilePath: ploidy file path (optional)
+        :param recFilePath: recombination rate file path (optional)
+
+    Returns:
+        None (writes updated metadata to output file)
     """
     if ploidyFilePath is None and recFilePath is None:
         raise ValueError("At least one of ploidyFilePath or recFilePath must be provided.")
