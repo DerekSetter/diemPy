@@ -44,8 +44,8 @@ where DMBC is allowed to store states other than {0,1,2,3}
 (c.f. vcf2diem output)
 
 The four (future-proofed = X) points are:
-X   PAR_statewise_genomes_summary_given_DI
-X   SER_statewise_genomes_summary_given_DI
+    X   PAR_statewise_genomes_summary_given_DI
+    X   SER_statewise_genomes_summary_given_DI
     pwmatrixFromDiemType
 
 
@@ -3108,16 +3108,17 @@ def flatten_ring_with_offsets(per_chr_ring, length_of_chromosomes):
     Convert per-chromosome ring representation into a single
     global-coordinate ring suitable for IrisPlot / LongPlot.
 
-    per_chr_ring:
-        [
-          [(w,s,e), ...],   # chromosome 0 (local coords)
-          [(w,s,e), ...],   # chromosome 1
-          ...
-        ]
+        per_chr_ring:
+                [
+                    [(w,s,e), ...],   # chromosome 0 (local coords)
+                    [(w,s,e), ...],   # chromosome 1
+                    ...
+                ]
 
-    length_of_chromosomes:
-        dict preserving chromosome order:
-          chrom -> (start, end, length)
+        length_of_chromosomes:
+                dict preserving chromosome order:
+                    chrom -> (start, end, length)
+
     """
     flat = []
     chrom_keys = list(length_of_chromosomes.keys())

@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diem"
-version = "0.0.1"
+version = "1.0"
 authors = [
   { name="Derek Setter", email="derek.setter@gmail.com" },
+  { name = "Stuart J.E. Baird"}
 ]
 description = "Polarize genomes using diem"
 readme = "README.md"

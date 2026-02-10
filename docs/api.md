@@ -14,7 +14,7 @@ This is the API
     :exclude-members: DiemType
 
 .. autoclass:: diem.diemtype.DiemType
-   :members: add_relative_recombination_rates,sort,copy,polarize,apply_threshold,smooth,create_contig_matrix,get_intervals_of_state,intervals_to_bed
+   :members: sort,copy,polarize,apply_threshold,smooth,create_contig_matrix,get_intervals_of_state,intervals_to_bed
 ```
 
 
@@ -51,7 +51,7 @@ This is the API
 ## plots submodule
 ```{eval-rst}
 .. automodule:: diem.plots
-    :members:
+    :members: GenomeSummaryPlot, GenomeMultiSummaryPlot,GenomicDeFinettiPlot, GenomicMultiDeFinettiPlot, GenomicContributionsPlot, diemPairsPlot, diemMultiPairsPlot, diemPlotPrepFromBedMeta, diemIrisFromPlotPrep, diemLongFromPlotPrep
 ```
 
 This is the end of the API documentation

@@ -13,12 +13,7 @@ parts:
   label: part-getting-started
   chapters:
   - file: installation
-  - file: vcf-conversion
   - file: quickstart
-- caption: Advanced Polarizing Methods
-  label: part-advanced-polarizing-methods
-  chapters:
-  - file: advanced-polarizing
 - caption: API Reference
   label: part-api-reference
   chapters:
