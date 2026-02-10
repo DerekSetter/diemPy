@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "diem"
+name = "diempy"
 version = "0.9"
 authors = [
   { name="Derek Setter", email="derek.setter@gmail.com" },
