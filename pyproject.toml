@@ -31,4 +31,4 @@ license = "GPL-3.0"
 license-files = ["LICEN[CS]E*"]
 
 [project.scripts]
-vcf2diem = "diem.vcf2diembeds:main"
+vcf2diem = "diempy.vcf2diembeds:main"
