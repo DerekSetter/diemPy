@@ -123,6 +123,10 @@ class DiemType:
     :ivar threshold: float. Threshold value to be set.
     :ivar smoothScale: float. Scale for kernel smoothing, to be set.
     :ivar contigMatrix: np.ndarray dtype=object. Matrix of Contig objects, to be created.
+    :ivar siteExclusionsByChr: List[np.ndarray]. List of arrays of positions indicating which sites to exclude for each chromosome when polarizing.
+    :ivar indExclusions: np.ndarray. Array of names of individuals to exclude when polarizing.
+    :ivar relativeRecRateDict: dict. Dictionary of relative recombination rates by chromosome name.
+
     """
 
     def __init__(self,DMBC, indNames, chrPloidies, chrNames, posByChr,chrLengths,exclusionsByChr=None,indExclusions=None):
@@ -149,6 +153,7 @@ class DiemType:
 
         self.siteExclusionsByChr = exclusionsByChr
         self.indExclusions = indExclusions
+        self.relativeRecRateDict = None
         #self.idealMarker = None
         #self.barrierBreakIdx = None
 
@@ -195,14 +200,43 @@ class DiemType:
                 indices = np.where((self.posByChr[chrIdx] >= start) & (self.posByChr[chrIdx] < end))[0]
                 self.siteExclusionsByChr[chrIdx] = self.siteExclusionsByChr[chrIdx] + indices.tolist()
         
+        # Sort and deduplicate all chromosome exclusions
+        for chrIdx in range(len(self.siteExclusionsByChr)):
+            if self.siteExclusionsByChr[chrIdx] is not None:
+                self.siteExclusionsByChr[chrIdx] = sorted(list(set(self.siteExclusionsByChr[chrIdx])))
+
         # Report any skipped chromosomes
         if skipped_chromosomes:
             print(f"Warning: The following chromosomes in the exclusions file were not found in the dataset and were skipped: {sorted(skipped_chromosomes)}")
         
+    def add_initial_polarity(self,filePath):
 
+        df = pd.read_csv(filePath,header=0,sep='\t')
+    
+        listed_names = np.unique(df['chromosome'].values.tolist())
+        if set(listed_names) != set(self.chrNames):
+            print("the chromosome names in the polarity file do not match those in the DiemType instance")
+            return None
+        
+        for idx,chrName in enumerate(self.chrNames):
+            
+            inputPositions = df.loc[df['chromosome'] == chrName,'position'].values
+            inputPositions = np.array(inputPositions,dtype=np.int32)
+
+            if not np.array_equal(inputPositions,np.array(self.posByChr[idx])):
+                print("the positions for chromosome ",chrName," in the polarity file do not match those in the DiemType instance")
+                return None
+
+
+            thisChrPolarity = df.loc[df['chromosome'] == chrName,'polarity'].values
+            thisChrPolarity = np.array(thisChrPolarity,dtype=np.int8)
+            if self.initialPolByChr is None:
+                self.initialPolByChr = [None]*len(self.chrNames)
+            self.initialPolByChr[idx] = thisChrPolarity
+           
     def computeHIs(self,force=False):
         """
-        Compute heterozygosity indices for each individual.
+        Compute hybrid indices for each individual.
         """
         if self.PolByChr is None and force==False:
             print("data must be polarized before computing HIs. Resorting will be done automatically after polarizing, thresholding, or smoothing.")
@@ -359,10 +393,16 @@ class DiemType:
         initMBC = [pol.stateMatrix_to_MArray(x) for x in self.DMBC]
         initPolBC = []
 
-        if boolTestData == True:
+        if self.initialPolByChr is not None:
+            print("using the provided initial polarity")
+            initPolBC = self.initialPolByChr
+            for idx, M in enumerate(initMBC):
+                initMBC[idx] = pol.initialize_given_polarity(M,initPolBC[idx])
+        elif boolTestData == True:
             print("initializing test polarity")
             for idx,M in enumerate(initMBC):
                 thisPol,thisM = pol.initialize_test_polarity(M)
+ #               print("SJEB initialized test polarity for chromosome",idx)
                 initMBC[idx] = thisM
                 initPolBC.append(thisPol)
         else:
@@ -432,10 +472,10 @@ class DiemType:
             a.sort()
             print("new hybrid indices computed and individuals have been resorted by HI")
         else:
-            print("hybrid indices have likely changed, but have not been updated")
-            print("to update HIs without re-sorting, update the attribute a.HIs = a.computeHIs()")
-            print("You may also call the sort() method on the resulting data if you wish to both re-compute and resort")
-        
+            a.HIs = a.computeHIs()
+            print("hybrid indices have been updated")
+            print("but individuals have NOT been resorted by HI.")
+    
         return a
     
     def smooth(self,scale: float ,reSort=False,reSmooth=False,parallel=True):
@@ -469,12 +509,20 @@ class DiemType:
             print("using parallel smoothing")
         else:
             print("using serial smoothing")
-            
+
+        if self.relativeRecRateDict is not None:
+            print("adjusting smoothing scale by relative recombination rates for each chromosome")    
         for idx in range(len(a.DMBC)):
+            thisScale = scale
+            if self.relativeRecRateDict is not None:
+                chrName = a.chrNames[idx]
+                if chrName in self.relativeRecRateDict:
+                    thisScale = thisScale / self.relativeRecRateDict[chrName] #divide by relative rate to adjust smoothing scale
+                    # print("adjusted smoothing scale for chromosome ",chrName," to ",scale)
             if parallel == False:
-                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],scale)
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes(a.MapBC[idx],a.DMBC[idx],thisScale)
             else:
-                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes_parallel(a.MapBC[idx],a.DMBC[idx],scale)
+                thisStateMatSmoothed = ks.laplace_smooth_multiple_haplotypes_parallel(a.MapBC[idx],a.DMBC[idx],thisScale)
 
             a.DMBC[idx] = thisStateMatSmoothed
         if reSort == False:

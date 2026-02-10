@@ -25,12 +25,13 @@ from . import smooth
 from . import tests
 from . import utils
 from . import io
+from . import plots
 
 # Import key functions for direct access
 # I/O functions
 from .io import read_diem_bed
 from .io import write_polarized_bed
-from .io import update_ploidy
+from .io import update_meta
 
 # DiemType object handling
 from .diemtype import save_DiemType
@@ -56,3 +57,17 @@ from .utils import count_site_differences
 
 # Make DiemType class directly accessible
 from .diemtype import DiemType
+
+# Make plots classes directly accessible
+
+from .plots import GenomeSummaryPlot
+from .plots import GenomeMultiSummaryPlot
+from .plots import GenomicDeFinettiPlot
+from .plots import GenomicMultiDeFinettiPlot
+from .plots import GenomicContributionsPlot
+
+from .plots import diemPairsPlot
+
+from .plots import diemPlotPrepFromBedMeta
+from .plots import diemIrisFromPlotPrep
+from .plots import diemLongFromPlotPrep

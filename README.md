@@ -16,20 +16,17 @@ A Python package for genome polarization and subsequent analyses using the `diem
 - Flexible I/O for various genomic formats
 
 
-## Dependencies
-
-- numpy >= 1.20.0
-- pandas >= 1.3.0
-- numba >= 0.56.0
-- matplotlib >= 3.4.0
-- docopt >= 0.6.2
-- scikit-allel >= 1.3.0
-
 ## Documentation
 
-📚 **[Full Documentation](https://diempy.readthedocs.io/en/latest/intro.html)**
+The core concepts, installation, and API documentation can be found here:
 
-The comprehensive documentation includes:
+📚 **[Introduction, Installation, and API Documentation](https://diempy.readthedocs.io/en/latest/intro.html)**
+
+The primary documentation for using `diemPy` is provided as a self-guided tutorial with an example dataset:
+
+**[Tutorial]()
+This documentation 
+The documentation provides:
 - [Installation Guide](docs/installation.md)
 - [Quick Start Tutorial](docs/quickstart.md) 
 - [API Reference](docs/api.md)

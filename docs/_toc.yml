@@ -4,18 +4,16 @@
 format: jb-book
 root: intro
 parts:
-- caption: Getting started
+- caption: Introduction
+  label: part-introduction
+  chapters:
+  - file: key-features
+  - file: core-classes
+- caption: Getting Started
   label: part-getting-started
   chapters:
   - file: installation
   - file: quickstart
-  - file: core-concepts
-- caption: Tutorials & Examples
-  label: part-tutorials-examples
-  chapters:
-  - file: vcf-conversion
-  # - file: polarization
-  # - file: post-polarization analysis
 - caption: API Reference
   label: part-api-reference
   chapters:

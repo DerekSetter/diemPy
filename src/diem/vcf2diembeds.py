@@ -322,10 +322,12 @@ def main():
 
     # Write META (once, buffered) -- all 0-based
     default_ploidy = ['2'] * len(samples)
+    default_rec_rate = 1.0
+
     with open_out(meta_output_path) as mout:
         mout.write(
             '#Chrom\tRefStart0\tRefEnd0\tFirstVariantStart0\tLastVariantPos0\t'
-            'n(diem_inputs)\t' + '\t'.join(samples) + '\n'
+            'n(diem_inputs)\trelativeRecRates\t' + '\t'.join(samples) + '\n'
         )
         for chrom, count in chromosome_tally.items():
             ref_start0 = '0'
@@ -335,7 +337,7 @@ def main():
             last_variant_pos0 = str(int(maxpos[chrom]) - 1)  # convert 1-based VCF to 0-based
             mout.write(
                 f"{chrom}\t{ref_start0}\t{ref_end0}\t{first_var_start0}\t{last_variant_pos0}\t"
-                f"{count}\t" + '\t'.join(default_ploidy) + '\n'
+                f"{count}\t{default_rec_rate}\t" + '\t'.join(default_ploidy) + '\n'
             )
             
     total = nvars + necls
