@@ -24,13 +24,7 @@ The core concepts, installation, and API documentation can be found here:
 
 The primary documentation for using `diemPy` is provided as a self-guided tutorial with an example dataset:
 
-**[Tutorial]()
-This documentation 
-The documentation provides:
-- [Installation Guide](docs/installation.md)
-- [Quick Start Tutorial](docs/quickstart.md) 
-- [API Reference](docs/api.md)
-- [Example Workflows](docs/workflow_dev_test.ipynb)
+📚 **[Tutorial](https://github.com/DerekSetter/tutorial-DiemPy)
 
 
 ## License
