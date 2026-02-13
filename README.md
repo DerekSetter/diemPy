@@ -24,7 +24,7 @@ The core concepts, installation, and API documentation can be found here:
 
 The primary documentation for using `diemPy` is provided as a self-guided tutorial with an example dataset:
 
-📚 **[Tutorial](https://github.com/DerekSetter/tutorial-DiemPy)
+📚 **[Tutorial](https://github.com/DerekSetter/tutorial-DiemPy)**
 
 
 ## License
