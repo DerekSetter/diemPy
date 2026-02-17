@@ -44,8 +44,8 @@ where DMBC is allowed to store states other than {0,1,2,3}
 (c.f. vcf2diem output)
 
 The four (future-proofed = X) points are:
-    X   PAR_statewise_genomes_summary_given_DI
-    X   SER_statewise_genomes_summary_given_DI
+X   PAR_statewise_genomes_summary_given_DI
+X   SER_statewise_genomes_summary_given_DI
     pwmatrixFromDiemType
 
 
@@ -311,11 +311,11 @@ def Chr_Nickname(chr_name):
         str: Shortened chromosome name.
     """
     if 'scaffold' in chr_name:
-        return chr_name.replace('scaffold_', 'Scaf ')[-7:]
+        return chr_name.replace('scaffold', 'Scaf ')[-10:]
     elif 'chromosome' in chr_name:
-        return chr_name.replace('chromosome_', 'Chr ')[-6:]
+        return chr_name.replace('chromosome', 'Chr ')[-9:]
     else:
-        return chr_name[-7:]
+        return chr_name[-15:]
     
 def Ind_Nickname(ind_name):
     """
@@ -352,7 +352,13 @@ def read_diem_bed_4_plots(bed_file_path, meta_file_path):
     # Read metadata - no changes needed here as it's already fast
     df_meta = pd.read_csv(meta_file_path, sep='\t')
     chrNames = np.array(df_meta['#Chrom'].values)
-    chrRelativeRecRates = np.array(df_meta['relativeRecRates'].values)
+    #chrRelativeRecRates = np.array(df_meta['relativeRecRates'].values)
+    if "relativeRecRates" in df_meta.columns:
+        chrRelativeRecRates = np.asarray(df_meta["relativeRecRates"].values)
+    else:
+        # Default: no recombination adjustment
+        # Use chromosome count (24 in your case)
+        chrRelativeRecRates = np.ones(len(chrNames), dtype=float)
     chrLengths = np.array(df_meta['RefEnd0'].values) - np.array(df_meta['RefStart0'].values)
     sampleNames = np.array(df_meta.columns[6:])
     
@@ -420,7 +426,7 @@ def get_DI_span(aDT):
     maxDI=float('-inf')
     for idx, chr  in enumerate(aDT.DIByChr):
         minDI=min(minDI,min(aDT.DIByChr[idx]))
-        maxDI=max(minDI,max(aDT.DIByChr[idx]))
+        maxDI=max(maxDI,max(aDT.DIByChr[idx]))
     return [minDI,maxDI]
 
 
@@ -723,10 +729,328 @@ diemColours = [
 ]
 
 
+"""________________________________________ cache-ing helpers ___________________"""
+import numpy as np
+import time
+from dataclasses import dataclass
+from typing import Dict, Tuple, List, Optional
+
+# Types matching your existing API
+ChromCounts = List[dict]                 # length nChr, dict with counts0..counts3 arrays (nInds,)
+ChromRetained = List[Tuple[int, int]]    # length nChr, (kept, total)
+
+
+@dataclass
+class _ChrIncrementalState:
+    """Internal mutable state for one chromosome during cache prefill."""
+    order_asc: np.ndarray          # (nSites,) indices sorting DI ascending
+    di_sorted: np.ndarray          # (nSites,) DI in ascending order
+    k: int                         # current start index of retained suffix in di_sorted
+    c0: np.ndarray                 # (nInds,) int counts (unweighted)
+    c1: np.ndarray                 # (nInds,)
+    c2: np.ndarray                 # (nInds,)
+    c3: np.ndarray                 # (nInds,)
+    ploidy_w: np.ndarray           # (nInds,) float weights
+
+
+class StatewiseDIIncrementalCache:
+    """
+    Prefills snapshots for statewise_genomes_summary_given_DI for a fixed DI grid.
+
+    Key property:
+      - Across the whole prefill, each site is incorporated at most once (incremental).
+      - No giant per-site prefix arrays are stored.
+      - Snapshots are stored as ploidy-weighted float arrays (same as your API).
+    """
+
+    def __init__(
+        self,
+        aDT,
+        di_grid: np.ndarray,
+        progress: Optional[str] = None,   # None | "text"
+        label: str = "Statewise cache prefill",
+    ):
+        self.aDT = aDT
+        self.di_grid = np.asarray(di_grid, dtype=float)
+        self.progress = progress
+        self.label = label
+
+        # Snapshots keyed by exact grid value (float)
+        self._snapshots: Dict[float, Tuple[ChromCounts, ChromRetained]] = {}
+
+        # Precompute per-chromosome incremental state
+        self._chr_states: List[_ChrIncrementalState] = self._init_chr_states()
+
+    def _init_chr_states(self) -> List[_ChrIncrementalState]:
+        nChr = len(self.aDT.DMBC)
+        nInds = self.aDT.DMBC[0].shape[0]
+        states: List[_ChrIncrementalState] = []
+
+        for chr_idx in range(nChr):
+            DI = np.asarray(self.aDT.DIByChr[chr_idx], dtype=float)
+            order = np.argsort(DI, kind="mergesort")  # stable, asc
+            di_sorted = DI[order]
+
+            ploidy_w = np.asarray(self.aDT.chrPloidies[chr_idx], dtype=float)
+
+            states.append(
+                _ChrIncrementalState(
+                    order_asc=order,
+                    di_sorted=di_sorted,
+                    k=di_sorted.size,  # start with none retained (threshold > max)
+                    c0=np.zeros(nInds, dtype=np.int64),
+                    c1=np.zeros(nInds, dtype=np.int64),
+                    c2=np.zeros(nInds, dtype=np.int64),
+                    c3=np.zeros(nInds, dtype=np.int64),
+                    ploidy_w=ploidy_w,
+                )
+            )
+        return states
+
+    def prefill(self):
+        """
+        Fill snapshots for all DI values in self.di_grid.
+
+        We iterate thresholds from HIGH → LOW so the retained set only grows,
+        letting us add newly-included sites once.
+        """
+        t0 = time.time()
+
+        # We prefill in descending DI so retained grows monotonically.
+        grid_desc = np.array(sorted(self.di_grid, reverse=True), dtype=float)
+        n_steps = grid_desc.size
+
+        for step_i, thr in enumerate(grid_desc, start=1):
+            chrom_counts: ChromCounts = []
+            chrom_retained: ChromRetained = []
+
+            for chr_idx, st in enumerate(self._chr_states):
+                nSites = st.di_sorted.size
+                nInds = st.c0.size
+
+                # New retained suffix start index for DI >= thr
+                k_new = int(np.searchsorted(st.di_sorted, thr, side="left"))
+
+                # Add sites that become newly retained: [k_new : st.k)
+                if k_new < st.k:
+                    # indices in original site order
+                    idxs = st.order_asc[k_new:st.k]
+                    SM = self.aDT.DMBC[chr_idx]  # (nInds, nSites_chr)
+
+                    # Take the block (this allocates a temporary block array)
+                    block = np.take(SM, idxs, axis=1)
+
+                    # Count states in the block
+                    b0 = (block == 0).sum(axis=1)
+                    b1 = (block == 1).sum(axis=1)
+                    b2 = (block == 2).sum(axis=1)
+                    # everything else -> state3
+                    b3 = block.shape[1] - (b0 + b1 + b2)
+
+                    st.c0 += b0
+                    st.c1 += b1
+                    st.c2 += b2
+                    st.c3 += b3
+
+                    st.k = k_new  # retained suffix starts earlier now
+
+                kept = nSites - st.k
+                chrom_retained.append((int(kept), int(nSites)))
+
+                w = st.ploidy_w
+                chrom_counts.append({
+                    "counts0": w * st.c0.astype(float),
+                    "counts1": w * st.c1.astype(float),
+                    "counts2": w * st.c2.astype(float),
+                    "counts3": w * st.c3.astype(float),
+                })
+
+            # Store snapshot under exact threshold value
+            self._snapshots[float(thr)] = (chrom_counts, chrom_retained)
+
+            if self.progress == "text":
+                elapsed = time.time() - t0
+                pct = int(round(100.0 * step_i / n_steps))
+                print(f"{self.label}: {step_i}/{n_steps} ({pct}%)  elapsed {elapsed:.1f}s")
+
+        return self
+
+    def get(self, DIthreshold: float) -> Tuple[ChromCounts, ChromRetained]:
+        """
+        Retrieve nearest snapshot for arbitrary DIthreshold.
+        """
+        thr = float(DIthreshold)
+
+        # Find nearest grid value
+        grid = self.di_grid
+        j = int(np.argmin(np.abs(grid - thr)))
+        key = float(grid[j])
+
+        # NOTE: snapshots stored by exact float of grid values; should exist if prefilling done
+        return self._snapshots[key]
+
+
+
+import numpy as np
+import time
+from dataclasses import dataclass
+from typing import Dict, Optional, Sequence
+
+
+@dataclass
+class _ChrPWState:
+    order_asc: np.ndarray   # indices sorting DI ascending
+    di_sorted: np.ndarray   # DI ascending
+    k: int                  # current suffix start index (retained = [k:])
+    SM: np.ndarray          # (n_ind, n_sites_chr) numeric codes, clamped to 0..3
+
+
+def _pw_weight_matrix():
+    W = np.zeros((4, 4), dtype=np.float32)
+    W[1, 2] = W[2, 1] = 1
+    W[1, 3] = W[3, 1] = 2
+    W[2, 2] = 1
+    W[2, 3] = W[3, 2] = 1
+    return W
+
+
+class PairwiseDIIncrementalCache:
+    """
+    Incremental prefill cache for PARApwmatrixFromDiemType-like distance matrices
+    over a fixed DI grid.
+
+    - Prefill iterates DI thresholds HIGH → LOW so retained set grows.
+    - Each site is incorporated at most once across the entire prefill.
+    - Snapshots store M (num/den) for each DI grid point.
+    """
+
+    def __init__(
+        self,
+        aDT,
+        di_grid: np.ndarray,
+        *,
+        chrom_indices: Optional[Sequence[int]] = None,
+        progress: Optional[str] = None,      # None | "text"
+        label: str = "Pairwise cache prefill",
+        snapshot_dtype=np.float32,           # store snapshots as float32 to reduce memory
+    ):
+        self.aDT = aDT
+        self.di_grid = np.asarray(di_grid, dtype=float)
+        self.progress = progress
+        self.label = label
+        self.snapshot_dtype = snapshot_dtype
+
+        self.n_ind = int(aDT.DMBC[0].shape[0])
+        self.W = _pw_weight_matrix()
+
+        if chrom_indices is None:
+            chrom_indices = range(len(aDT.DMBC))
+        self.chrom_indices = [int(i) for i in chrom_indices]
+
+        self._chr_states = self._init_chr_states()
+        self._snapshots: Dict[float, np.ndarray] = {}
+
+        # Global incremental accumulators across ALL chosen chromosomes
+        self._num = np.zeros((self.n_ind, self.n_ind), dtype=np.float64)
+        self._den = np.zeros((self.n_ind, self.n_ind), dtype=np.int64)
+
+    def _init_chr_states(self):
+        states = []
+        for chr_idx in self.chrom_indices:
+            DI = np.asarray(self.aDT.DIByChr[chr_idx], dtype=float)
+            order = np.argsort(DI, kind="mergesort")   # asc
+            di_sorted = DI[order]
+
+            # Clamp states: >2 -> 3 (future-proofing) ; keep 0 as missing
+            SM = np.minimum(self.aDT.DMBC[chr_idx], 3).astype(np.int8)
+
+            states.append(_ChrPWState(
+                order_asc=order,
+                di_sorted=di_sorted,
+                k=di_sorted.size,  # start with none retained (thr > max)
+                SM=SM,
+            ))
+        return states
+
+    def _add_site_block(self, SM, idxs):
+        """
+        Incrementally add a block of sites (columns) into global num/den.
+        SM: (n_ind, n_sites_chr)
+        idxs: 1D array of column indices (site indices) to add
+        """
+        W = self.W
+        n_ind = self.n_ind
+
+        # iterate sites in the block
+        for s in idxs:
+            col = SM[:, s]                 # (n_ind,)
+            valid = col != 0
+            idx = np.nonzero(valid)[0]
+            m = idx.size
+            if m < 2:
+                continue
+
+            vals = col[idx].astype(np.int64)  # 1..3
+
+            # weights for all pairs in this site (m x m)
+            ww = W[vals[:, None], vals[None, :]].astype(np.float64)
+
+            # denom contribution: 1 for all off-diagonal pairs among valid indices
+            ones = np.ones((m, m), dtype=np.int64)
+            np.fill_diagonal(ones, 0)
+
+            # write into global matrices
+            ix = np.ix_(idx, idx)
+            self._num[ix] += ww
+            self._den[ix] += ones
+
+            # IMPORTANT: keep diagonal denom at 0 (avoid biological invalidity)
+            # (fill_diagonal already handled per-site)
+
+    def prefill(self):
+        t0 = time.time()
+        grid_desc = np.array(sorted(self.di_grid, reverse=True), dtype=float)
+        n_steps = grid_desc.size
+
+        for step_i, thr in enumerate(grid_desc, start=1):
+            # Update each chromosome incremental state, and add newly-retained sites
+            for st in self._chr_states:
+                # retained set is DI >= thr => suffix start k_new
+                k_new = int(np.searchsorted(st.di_sorted, thr, side="left"))
+
+                if k_new < st.k:
+                    # newly included sites are [k_new : st.k) in DI-sorted order
+                    idxs = st.order_asc[k_new:st.k]
+                    self._add_site_block(st.SM, idxs)
+                    st.k = k_new
+
+            # Snapshot matrix for this threshold
+            M = np.full((self.n_ind, self.n_ind), np.nan, dtype=np.float64)
+            mask = self._den > 0
+            M[mask] = self._num[mask] / self._den[mask]
+            # do NOT force diagonal to 0; leave as nan unless data supported
+            self._snapshots[float(thr)] = M.astype(self.snapshot_dtype, copy=False)
+
+            if self.progress == "text":
+                elapsed = time.time() - t0
+                pct = int(round(100.0 * step_i / n_steps))
+                print(f"{self.label}: {step_i}/{n_steps} ({pct}%)  elapsed {elapsed:.1f}s")
+
+        return self
+
+    def get(self, DIthreshold: float) -> np.ndarray:
+        """
+        Return nearest snapshot matrix to DIthreshold.
+        """
+        thr = float(DIthreshold)
+        grid = self.di_grid
+        j = int(np.argmin(np.abs(grid - thr)))
+        key = float(grid[j])
+        return self._snapshots[key]
 
 """________________________________________ START GenomeSummariesPlot ___________________"""
 
-class GenomeSummaryPlot:
+class OLDGenomeSummaryPlot:
     """
     Plots genome summaries with DI filtering and interactive widgets.
 
@@ -892,6 +1216,561 @@ class GenomeSummaryPlot:
         self.indNameFont = val
         self._update_xticks()
         self.fig.canvas.draw_idle()
+
+class OLDISHGenomeSummaryPlot:
+    """
+    Plots genome summaries with DI filtering and interactive widgets.
+
+    Drop-in extension:
+      - optional cache prefill over a DI grid (text progress)
+      - DI slider uses cached results (nearest match within tol)
+    """
+    def __init__(
+        self,
+        dPol,
+        *,
+        prefill_cache=False,      # NEW: set True to precompute cache
+        prefill_step=None,        # NEW: DI step for prefill grid (defaults to slider span / 200)
+        cache_tol=None,           # NEW: tolerance for nearest-cache lookup (defaults to prefill_step/2)
+        progress="text",          # NEW: "text" | "none"
+    ):
+        self.dPol = dPol
+
+        # ---- initial state ----
+        self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]
+        self.indNameFont = 6
+        self.indHIorder = np.arange(len(dPol.indNames))
+
+        # ---- cache (per instance) ----
+        # cache maps DI_value(float) -> (summaries, chrom_retained)
+        self._cache = {}
+        self._cache_keys_sorted = []  # keep a sorted list of DI keys for nearest lookup
+
+        def _cache_set(di, value):
+            di = float(di)
+            if di not in self._cache:
+                self._cache_keys_sorted.append(di)
+                self._cache_keys_sorted.sort()
+            self._cache[di] = value
+
+        def _cache_get_nearest(di, tol):
+            """Return cached payload for nearest DI within tol, else None."""
+            if not self._cache_keys_sorted:
+                return None
+            di = float(di)
+
+            # binary search
+            import bisect
+            keys = self._cache_keys_sorted
+            j = bisect.bisect_left(keys, di)
+            candidates = []
+            if 0 <= j < len(keys):
+                candidates.append(keys[j])
+            if 0 <= j - 1 < len(keys):
+                candidates.append(keys[j - 1])
+
+            best = None
+            best_dist = None
+            for k in candidates:
+                dist = abs(k - di)
+                if best_dist is None or dist < best_dist:
+                    best = k
+                    best_dist = dist
+
+            if best is None or best_dist is None or best_dist > tol:
+                return None
+            return self._cache[best]
+
+        self._cache_set = _cache_set
+        self._cache_get_nearest = _cache_get_nearest
+
+        # ---- initial summaries (no filter) ----
+        self.chrom_counts, self.chrom_retained = statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
+        self.summaries = summaries_from_statewise_counts(self.chrom_counts)
+
+        self.DInumer = sum(n for n, _ in self.chrom_retained)
+        self.DIdenom = sum(d for _, d in self.chrom_retained)
+        self.prop = self.DInumer / self.DIdenom if self.DIdenom else 0.0
+
+        # ---- figure & axes ----
+        self.fig, self.ax = plt.subplots(figsize=(11, 4))
+
+        colours = Flatten([['red'], diemColours[1:], ['gray']])
+
+        self.lines = []
+        for summary, colour in zip(self.summaries, colours):
+            line, = self.ax.plot(summary, color=colour, marker='.')
+            self.lines.append(line)
+
+        self.ax.legend(['HI', 'HOM1', 'HET', 'HOM2', 'U'])
+        self.ax.set_ylim(0, 1)
+        self.ax.set_title('Genomes summaries; no DI filter')
+        self.ax.tick_params(axis='x', rotation=55)
+
+        self._update_xticks()
+
+        # ---- widgets ----
+        self._init_widgets()
+
+        # ---- OPTIONAL: prefill cache grid (text progress) ----
+        if prefill_cache:
+            DI_span = get_DI_span(self.dPol)
+
+            # DEBUG endpoint test
+            lo, hi = DI_span
+            for test in [lo, hi]:
+                cc, cr = statewise_genomes_summary_given_DI(self.dPol, test)
+                kept = sum(n for n, _ in cr)
+                total = sum(d for _, d in cr)
+                print(f"DEBUG endpoint test DI={test}: kept={kept} total={total} frac={(kept/total if total else None)}")
+
+
+            di_min, di_max = float(DI_span[0]), float(DI_span[1])
+
+            if prefill_step is None:
+                # sensible default: ~200 steps across the span
+                span = di_max - di_min
+                prefill_step = span / 200.0 if span > 0 else 1.0
+
+            if cache_tol is None:
+                cache_tol = float(prefill_step) / 2.0
+
+            # Build DI grid including endpoints
+            n_steps = int(np.floor((di_max - di_min) / prefill_step)) if di_max > di_min else 0
+            di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
+            if not di_values or di_values[-1] < di_max:
+                di_values.append(di_max)
+
+            def compute_payload(di):
+                chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, di)
+                summaries = summaries_from_statewise_counts(chrom_counts)
+                return (summaries, chrom_retained)
+
+            # ---- plug into your helper ----
+            # We adapt it by passing a tiny wrapper "cache" object.
+            class _TinyCache:
+                def __init__(self, outer):
+                    self.outer = outer
+
+                def set_float_key(self, *, namespace, basekey, x, value):
+                    self.outer._cache_set(x, value)
+
+                def get_nearest_float_key(self, *, namespace, basekey, x, tol):
+                    # return value, not key, to match our usage below
+                    return self.outer._cache_get_nearest(x, tol)
+
+            tiny = _TinyCache(self)
+
+            # basekey/namespace unused by TinyCache but kept for API compatibility
+            prefill_slider_cache(
+                cache=tiny,
+                namespace="GenomeSummaryPlot",
+                basekey=id(self.dPol),
+                di_values=di_values,
+                compute_fn=compute_payload,
+                tol=None,                 # let it fill all grid points
+                progress=progress,        # "text" requested
+                label="GenomeSummary cache prefill",
+            )
+
+            # Store tol for DIupdate lookup
+            self._cache_tol = float(cache_tol)
+        else:
+            # No prefill: still allow opportunistic caching on demand
+            self._cache_tol = 0.0
+
+        # ---- coordinate display ----
+        self._install_format_coord()
+
+        plt.show()
+
+    # ---------------- helpers ----------------
+
+    def _update_xticks(self):
+        self.ax.set_xticks(
+            np.arange(len(self.IndNickNames)),
+            np.array(self.IndNickNames)[self.indHIorder],
+            rotation=55,
+            fontsize=self.indNameFont,
+            horizontalalignment='right'
+        )
+
+    def _install_format_coord(self):
+        n = len(self.dPol.indNames)
+        tolerance = 0.03  # vertical proximity in y-units
+
+        def format_coord(x, y):
+            fallback = "\u2007" * 30  # stable in ipympl
+
+            i = int(round(x))
+            if i < 0 or i >= n:
+                return fallback
+
+            for summary in self.summaries:
+                y0 = summary[self.indHIorder][i]
+                if abs(y - y0) < tolerance:
+                    return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
+
+            return fallback
+
+        self.ax.format_coord = format_coord
+
+    # ---------------- widgets ----------------
+
+    def _init_widgets(self):
+        DI_span = get_DI_span(self.dPol)
+
+        print("DEBUG DI_span:")
+        print("  DI_span:", DI_span)
+
+        # If you have access to the raw DI vector somewhere, also print actual min/max
+        try:
+            di = np.asarray(self.dPol.DI, dtype=float)  # adjust attribute name if needed
+            di = di[np.isfinite(di)]
+            print("  dPol.DI finite min/max:", float(np.min(di)), float(np.max(di)))
+            print("  dPol.DI finite count:", di.size)
+        except Exception as e:
+            print("  (could not read dPol.DI):", repr(e))
+        # END print("DEBUG DI_span:")
+
+        self.fig.subplots_adjust(bottom=0.3)
+
+        # DI slider
+        DI_box = self.fig.add_axes([0.2, 0.1, 0.65, 0.03])
+        self.DI_slider = Slider(
+            ax=DI_box,
+            label='DI',
+            valmin=DI_span[0],
+            valmax=DI_span[1],
+            valinit=DI_span[0],
+        )
+        self.DI_slider.on_changed(self.DIupdate)
+
+        # Font slider
+        FONT_box = self.fig.add_axes([0.25, 0.025, 0.1, 0.04])
+        self.FONT_slider = Slider(
+            ax=FONT_box,
+            label='IndLabels font',
+            valmin=1,
+            valmax=16,
+            valinit=self.indNameFont,
+        )
+        self.FONT_slider.on_changed(self.FONTupdate)
+
+        # Reorder button
+        reorderBox = self.fig.add_axes([0.8, 0.025, 0.1, 0.04])
+        self.reo_button = Button(
+            reorderBox,
+            'Reorder by HI',
+            hovercolor='0.975',
+            color='red'
+        )
+        self.reo_button.on_clicked(self.reorder)
+
+    # ---------------- callbacks ----------------
+
+    def DIupdate(self, val):
+        # ---- cache lookup first ----
+        payload = None
+        if self._cache_tol > 0:
+            payload = self._cache_get_nearest(val, self._cache_tol)
+
+        if payload is None:
+            # compute + store (lazy fill)
+            self.chrom_counts, self.chrom_retained = statewise_genomes_summary_given_DI(self.dPol, val)
+            self.summaries = summaries_from_statewise_counts(self.chrom_counts)
+            self._cache_set(val, (self.summaries, self.chrom_retained))
+        else:
+            self.summaries, self.chrom_retained = payload
+
+        self.DInumer = sum(n for n, _ in self.chrom_retained)
+        self.DIdenom = sum(d for _, d in self.chrom_retained)
+        self.prop = self.DInumer / self.DIdenom if self.DIdenom else 0.0
+
+        self.ax.set_title(
+            "Genomes summaries DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(val, self.DInumer, 100 * self.prop)
+        )
+
+        for line, summary in zip(self.lines, self.summaries):
+            line.set_ydata(summary[self.indHIorder])
+
+        self.fig.canvas.draw_idle()
+
+    def reorder(self, event):
+        self.indHIorder = np.argsort(self.summaries[0])  # HI
+        self._update_xticks()
+
+        for line, summary in zip(self.lines, self.summaries):
+            line.set_ydata(summary[self.indHIorder])
+
+        self.fig.canvas.draw_idle()
+
+    def FONTupdate(self, val):
+        self.indNameFont = val
+        self._update_xticks()
+        self.fig.canvas.draw_idle()
+
+
+import numpy as np
+import bisect
+from matplotlib.widgets import Button, Slider
+import matplotlib.pyplot as plt
+
+class GenomeSummaryPlot:
+    """
+    Plots genome summaries with DI filtering and interactive widgets.
+
+    Drop-in extension:
+      - optional cache prefill over a DI grid (text progress)
+      - DI slider uses cached results (nearest match within tol)
+      - PREFILL uses StatewiseDIIncrementalCache (incremental, sorted-DI sweep)
+    """
+    def __init__(
+        self,
+        dPol,
+        *,
+        prefill_cache=False,      # NEW
+        prefill_step=None,        # NEW
+        cache_tol=None,           # NEW
+        progress=None,          # NEW: "text" | "none"
+    ):
+        self.dPol = dPol
+
+        # ---- initial state ----
+        self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]
+        self.indNameFont = 6
+        self.indHIorder = np.arange(len(dPol.indNames))
+
+        # ---- cache (per instance) ----
+        # cache maps DI_value(float) -> (summaries, chrom_retained)
+        self._cache = {}
+        self._cache_keys_sorted = []
+
+        def _cache_set(di, value):
+            di = float(di)
+            if di not in self._cache:
+                bisect.insort(self._cache_keys_sorted, di)
+            self._cache[di] = value
+
+        def _cache_get_nearest(di, tol):
+            """Return cached payload for nearest DI within tol, else None."""
+            if not self._cache_keys_sorted:
+                return None
+            di = float(di)
+
+            keys = self._cache_keys_sorted
+            j = bisect.bisect_left(keys, di)
+
+            candidates = []
+            if 0 <= j < len(keys):
+                candidates.append(keys[j])
+            if 0 <= j - 1 < len(keys):
+                candidates.append(keys[j - 1])
+
+            best = None
+            best_dist = None
+            for k in candidates:
+                dist = abs(k - di)
+                if best_dist is None or dist < best_dist:
+                    best = k
+                    best_dist = dist
+
+            if best is None or best_dist is None or best_dist > tol:
+                return None
+            return self._cache[best]
+
+        self._cache_set = _cache_set
+        self._cache_get_nearest = _cache_get_nearest
+
+        # ---- initial summaries (no filter) ----
+        self.chrom_counts, self.chrom_retained = statewise_genomes_summary_given_DI(
+            self.dPol, float("-inf")
+        )
+        self.summaries = summaries_from_statewise_counts(self.chrom_counts)
+
+        self.DInumer = sum(n for n, _ in self.chrom_retained)
+        self.DIdenom = sum(d for _, d in self.chrom_retained)
+        self.prop = self.DInumer / self.DIdenom if self.DIdenom else 0.0
+
+        # ---- figure & axes ----
+        self.fig, self.ax = plt.subplots(figsize=(11, 4))
+
+        colours = Flatten([['red'], diemColours[1:], ['gray']])
+
+        self.lines = []
+        for summary, colour in zip(self.summaries, colours):
+            line, = self.ax.plot(summary, color=colour, marker='.')
+            self.lines.append(line)
+
+        self.ax.legend(['HI', 'HOM1', 'HET', 'HOM2', 'U'])
+        self.ax.set_ylim(0, 1)
+        self.ax.set_title('Genomes summaries; no DI filter')
+        self.ax.tick_params(axis='x', rotation=55)
+
+        self._update_xticks()
+
+        # ---- widgets ----
+        self._init_widgets()
+
+        # ---- OPTIONAL: prefill cache grid (INCREMENTAL helper) ----
+        if prefill_cache:
+            DI_span = get_DI_span(self.dPol)
+            di_min, di_max = float(DI_span[0]), float(DI_span[1])
+
+            if prefill_step is None:
+                span = di_max - di_min
+                prefill_step = span / 200.0 if span > 0 else 1.0
+
+            if cache_tol is None:
+                cache_tol = float(prefill_step) / 2.0
+
+            # Build DI grid including endpoints
+            if di_max > di_min:
+                n_steps = int(np.floor((di_max - di_min) / prefill_step))
+                di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
+                if not di_values or di_values[-1] < di_max:
+                    di_values.append(di_max)
+            else:
+                di_values = [di_min]
+
+            di_grid = np.asarray(di_values, dtype=float)
+
+            # --- incremental cache prefill ---
+            inc = StatewiseDIIncrementalCache(
+                self.dPol,
+                di_grid=di_grid,
+                progress=("text" if progress == "text" else None),
+                label="GenomeSummary cache prefill",
+            ).prefill()
+
+            # Convert chrom_counts snapshots into summaries once, and store
+            # NOTE: inc._snapshots keys are floats from the grid (descending fill, but dict unordered)
+            for di_key, (chrom_counts, chrom_retained) in inc._snapshots.items():
+                summaries = summaries_from_statewise_counts(chrom_counts)
+                self._cache_set(di_key, (summaries, chrom_retained))
+
+            self._cache_tol = float(cache_tol)
+        else:
+            self._cache_tol = 0.0
+
+        # ---- coordinate display ----
+        self._install_format_coord()
+
+        plt.show()
+
+    # ---------------- helpers ----------------
+
+    def _update_xticks(self):
+        self.ax.set_xticks(
+            np.arange(len(self.IndNickNames)),
+            np.array(self.IndNickNames)[self.indHIorder],
+            rotation=55,
+            fontsize=self.indNameFont,
+            horizontalalignment='right'
+        )
+
+    def _install_format_coord(self):
+        n = len(self.dPol.indNames)
+        tolerance = 0.03  # vertical proximity in y-units
+
+        def format_coord(x, y):
+            fallback = "\u2007" * 30
+            i = int(round(x))
+            if i < 0 or i >= n:
+                return fallback
+
+            for summary in self.summaries:
+                y0 = summary[self.indHIorder][i]
+                if abs(y - y0) < tolerance:
+                    return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
+            return fallback
+
+        self.ax.format_coord = format_coord
+
+    # ---------------- widgets ----------------
+
+    def _init_widgets(self):
+        DI_span = get_DI_span(self.dPol)
+
+        self.fig.subplots_adjust(bottom=0.3)
+
+        # DI slider
+        DI_box = self.fig.add_axes([0.2, 0.1, 0.65, 0.03])
+        self.DI_slider = Slider(
+            ax=DI_box,
+            label='DI',
+            valmin=DI_span[0],
+            valmax=DI_span[1],
+            valinit=DI_span[0],
+        )
+        self.DI_slider.on_changed(self.DIupdate)
+
+        # Font slider
+        FONT_box = self.fig.add_axes([0.25, 0.025, 0.1, 0.04])
+        self.FONT_slider = Slider(
+            ax=FONT_box,
+            label='IndLabels font',
+            valmin=1,
+            valmax=16,
+            valinit=self.indNameFont,
+        )
+        self.FONT_slider.on_changed(self.FONTupdate)
+
+        # Reorder button
+        reorderBox = self.fig.add_axes([0.8, 0.025, 0.1, 0.04])
+        self.reo_button = Button(
+            reorderBox,
+            'Reorder by HI',
+            hovercolor='0.975',
+            color='red'
+        )
+        self.reo_button.on_clicked(self.reorder)
+
+    # ---------------- callbacks ----------------
+
+    def DIupdate(self, val):
+        payload = None
+        if self._cache_tol > 0:
+            payload = self._cache_get_nearest(val, self._cache_tol)
+
+        if payload is None:
+            # lazy compute + store
+            chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, val)
+            summaries = summaries_from_statewise_counts(chrom_counts)
+            payload = (summaries, chrom_retained)
+            self._cache_set(val, payload)
+
+        self.summaries, self.chrom_retained = payload
+
+        self.DInumer = sum(n for n, _ in self.chrom_retained)
+        self.DIdenom = sum(d for _, d in self.chrom_retained)
+        self.prop = self.DInumer / self.DIdenom if self.DIdenom else 0.0
+
+        self.ax.set_title(
+            "Genomes summaries DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(val, self.DInumer, 100 * self.prop)
+        )
+
+        for line, summary in zip(self.lines, self.summaries):
+            line.set_ydata(summary[self.indHIorder])
+
+        self.fig.canvas.draw_idle()
+
+    def reorder(self, event):
+        self.indHIorder = np.argsort(self.summaries[0])  # HI
+        self._update_xticks()
+
+        for line, summary in zip(self.lines, self.summaries):
+            line.set_ydata(summary[self.indHIorder])
+
+        self.fig.canvas.draw_idle()
+
+    def FONTupdate(self, val):
+        self.indNameFont = int(val)
+        self._update_xticks()
+        self.fig.canvas.draw_idle()
+
 #________________________________________ END GenomeSummariesPlot ___________________
 
 
@@ -899,7 +1778,7 @@ class GenomeSummaryPlot:
 #________________________________________ START GenomeMultiSummaryPlot ___________________
 
 
-class GenomeMultiSummaryPlot:
+class OLDGenomeMultiSummaryPlot:
     """
     Plots genome summaries per chromosome with DI filtering and interactive widgets.
     These summaries include HI, HOM1, HET, HOM2, and U proportions per individual.
@@ -1221,13 +2100,406 @@ class GenomeMultiSummaryPlot:
     
         self.fig.canvas.draw_idle()
 
+
+import numpy as np
+import bisect
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Button, Slider
+
+class GenomeMultiSummaryPlot:
+    """
+    Plots genome summaries per chromosome with DI filtering and interactive widgets.
+
+    Drop-in extension:
+      - optional incremental cache prefill using StatewiseDIIncrementalCache
+      - DI slider uses cached results (nearest match within tol)
+      - keeps existing hover behaviour and plot style
+
+    Args:
+        dPol: DiemType object containing genomic data.
+        chrom_indices: List of chromosome indices to plot.
+        max_cols: max subplot columns.
+        prefill_cache: precompute incremental cache over DI grid.
+        prefill_step: DI step for grid (defaults to span/200).
+        cache_tol: nearest-cache tolerance (defaults to prefill_step/2).
+        progress: "text" | "none"
+    """
+
+    def __init__(
+        self,
+        dPol,
+        chrom_indices,
+        max_cols=3,
+        *,
+        prefill_cache=False,
+        prefill_step=None,
+        cache_tol=None,
+        progress=None,# "text" | None
+    ):
+        self.dPol = dPol
+        self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]
+        self.max_cols = max_cols
+
+        # ---- validate chromosomes ----
+        self.chrom_indices = self._validate_chrom_indices(chrom_indices)
+
+        # ---- ordering state ----
+        self.indNameFont = 6
+
+        # ---- cache (per instance) ----
+        # cache maps DI_value(float) -> payload
+        # payload = (global_summaries, chrom_retained, per_chr_summaries_dict)
+        self._cache = {}
+        self._cache_keys_sorted = []
+
+        def _cache_set(di, payload):
+            di = float(di)
+            if di not in self._cache:
+                bisect.insort(self._cache_keys_sorted, di)
+            self._cache[di] = payload
+
+        def _cache_get_nearest(di, tol):
+            if not self._cache_keys_sorted:
+                return None
+            di = float(di)
+            keys = self._cache_keys_sorted
+            j = bisect.bisect_left(keys, di)
+
+            candidates = []
+            if 0 <= j < len(keys):
+                candidates.append(keys[j])
+            if 0 <= j - 1 < len(keys):
+                candidates.append(keys[j - 1])
+
+            best = None
+            best_dist = None
+            for k in candidates:
+                dist = abs(k - di)
+                if best_dist is None or dist < best_dist:
+                    best = k
+                    best_dist = dist
+
+            if best is None or best_dist is None or best_dist > tol:
+                return None
+            return self._cache[best]
+
+        self._cache_set = _cache_set
+        self._cache_get_nearest = _cache_get_nearest
+
+        # ---- initial DI snapshot (no filter) ----
+        self.chrom_counts, self.chrom_retained = statewise_genomes_summary_given_DI(
+            self.dPol, float("-inf")
+        )
+
+        # authoritative whole-genome summaries (from statewise counts)
+        global_summaries = summaries_from_statewise_counts(self.chrom_counts)
+        self.global_HI = global_summaries[0]
+        self.indHIorder = np.argsort(self.global_HI)
+
+        # build per-chromosome summaries once (initial DI)
+        self.chrom_summaries = {}
+        for idx in self.chrom_indices:
+            self.chrom_summaries[idx] = summaries_from_statewise_counts([self.chrom_counts[idx]])
+
+        # ---- grid layout ----
+        n_plots = len(self.chrom_indices)
+        n_cols = min(self.max_cols, n_plots)
+        n_rows = (n_plots + n_cols - 1) // n_cols
+
+        fig_w = 4.5 * n_cols
+        fig_h = 3.5 * n_rows
+
+        self.fig, self.axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(fig_w, fig_h),
+            squeeze=False,
+            sharey=True
+        )
+
+        self.fig.subplots_adjust(
+            left=0.06,
+            right=0.98,
+            top=0.92,
+            bottom=0.45,
+            hspace=0.60,
+            wspace=0.25
+        )
+
+        # ---- draw plots ----
+        self.lines = {}
+        axes_flat = self.axes.flatten()
+
+        colours = Flatten([['red'], diemColours[1:], ['gray']])
+        global_hi_colour = "cyan"
+
+        self.chrom_axes = {}
+        self.global_hi_lines = {}
+
+        for ax, chrom_idx in zip(axes_flat, self.chrom_indices):
+            self.chrom_axes[chrom_idx] = ax
+            summaries = self.chrom_summaries[chrom_idx]
+
+            chrom_lines = []
+            for summary, colour in zip(summaries, colours):
+                line, = ax.plot(
+                    summary[self.indHIorder],
+                    color=colour,
+                    marker='.',
+                    linewidth=0.8
+                )
+                chrom_lines.append(line)
+
+            self.lines[chrom_idx] = chrom_lines
+
+            # global HI overlay
+            global_hi_line, = ax.plot(
+                self.global_HI[self.indHIorder],
+                color=global_hi_colour,
+                linestyle="-",
+                linewidth=1.5,
+                alpha=0.8,
+            )
+            self.global_hi_lines[chrom_idx] = global_hi_line
+
+            ax.set_ylim(0, 1)
+            num, denom = self.chrom_retained[chrom_idx]
+            ax.set_title(f"Chr {chrom_idx} | {num:,}/{denom:,} sites", fontsize=10)
+            ax.tick_params(axis='x', rotation=55)
+
+            ax.set_xticks(
+                np.arange(len(self.IndNickNames)),
+                np.array(self.IndNickNames)[self.indHIorder],
+                fontsize=self.indNameFont,
+                ha='right'
+            )
+
+        # hide unused axes
+        for ax in axes_flat[len(self.chrom_indices):]:
+            ax.axis("off")
+
+        # legend once
+        axes_flat[0].legend(
+            ['HIc', 'HOM1', 'HET', 'HOM2', 'U', 'HIg'],
+            fontsize=8,
+            frameon=False
+        )
+
+        # ---- widgets ----
+        self._init_widgets()
+
+        # ---- OPTIONAL: incremental cache prefill ----
+        if prefill_cache:
+            DI_span = get_DI_span(self.dPol)
+            di_min, di_max = float(DI_span[0]), float(DI_span[1])
+
+            if prefill_step is None:
+                span = di_max - di_min
+                prefill_step = span / 200.0 if span > 0 else 1.0
+
+            if cache_tol is None:
+                cache_tol = float(prefill_step) / 2.0
+
+            # Build DI grid including endpoints
+            if di_max > di_min:
+                n_steps = int(np.floor((di_max - di_min) / prefill_step))
+                di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
+                if not di_values or di_values[-1] < di_max:
+                    di_values.append(di_max)
+            else:
+                di_values = [di_min]
+
+            di_grid = np.asarray(di_values, dtype=float)
+
+            inc = StatewiseDIIncrementalCache(
+                self.dPol,
+                di_grid=di_grid,
+                progress=("text" if progress == "text" else None),
+                label="GenomeMultiSummary cache prefill",
+            ).prefill()
+
+            # Store only what this plot needs:
+            # - global summaries (all chr)
+            # - chrom_retained (all chr)
+            # - per-chr summaries for selected chrom_indices
+            for di_key, (chrom_counts, chrom_retained) in inc._snapshots.items():
+                global_summaries = summaries_from_statewise_counts(chrom_counts)
+
+                per_chr = {}
+                for idx in self.chrom_indices:
+                    per_chr[idx] = summaries_from_statewise_counts([chrom_counts[idx]])
+
+                self._cache_set(di_key, (global_summaries, chrom_retained, per_chr))
+
+            self._cache_tol = float(cache_tol)
+        else:
+            self._cache_tol = 0.0
+
+        # ---- coordinate display ----
+        self._install_format_coord()
+
+        plt.show()
+
+    # ==================================================
+    # Validation
+    # ==================================================
+
+    def _validate_chrom_indices(self, chrom_indices):
+        max_idx = len(self.dPol.chrLengths) - 1
+        valid, rejected = [], []
+
+        for idx in chrom_indices:
+            if isinstance(idx, (int, np.integer)) and 0 <= int(idx) <= max_idx:
+                valid.append(int(idx))
+            else:
+                rejected.append(idx)
+
+        if rejected:
+            print("GenomeMultiSummaryPlot: rejected chromosome indices:", rejected)
+
+        if not valid:
+            raise ValueError("GenomeMultiSummaryPlot: no valid chromosome indices.")
+
+        return valid
+
+    # ==================================================
+    # Hover
+    # ==================================================
+
+    def _install_format_coord(self):
+        n = len(self.dPol.indNames)
+        tolerance = 0.03
+
+        axes_flat = self.axes.flatten()[:len(self.chrom_indices)]
+        for ax, chrom_idx in zip(axes_flat, self.chrom_indices):
+            chrom_lines = self.lines[chrom_idx]
+
+            def make_format_coord(chrom_lines_local):
+                def format_coord(x, y):
+                    fallback = "\u2007" * 30
+                    i = int(round(x))
+                    if i < 0 or i >= n:
+                        return fallback
+
+                    for line in chrom_lines_local:
+                        ydata = line.get_ydata()
+                        if abs(y - ydata[i]) < tolerance:
+                            return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
+                    return fallback
+                return format_coord
+
+            ax.format_coord = make_format_coord(chrom_lines)
+
+    # ==================================================
+    # Widgets
+    # ==================================================
+
+    def _init_widgets(self):
+        DI_span = get_DI_span(self.dPol)
+
+        ax_DI = self.fig.add_axes([0.15, 0.18, 0.7, 0.03])
+        self.DI_slider = Slider(ax_DI, "DI", DI_span[0], DI_span[1], valinit=DI_span[0])
+        self.DI_slider.on_changed(self._on_DI_change)
+
+        ax_FS = self.fig.add_axes([0.25, 0.12, 0.1, 0.03])
+        self.FONT_slider = Slider(ax_FS, "IndLabel font", 4, 16,
+                                  valinit=self.indNameFont, valstep=1)
+        self.FONT_slider.on_changed(self._on_font_change)
+
+        ax_RE = self.fig.add_axes([0.75, 0.115, 0.15, 0.045])
+        self.reorder_button = Button(
+            ax_RE,
+            "Reorder by global HI",
+            hovercolor="0.95",
+            color="cyan"
+        )
+        self.reorder_button.on_clicked(self._on_reorder)
+
+    # ==================================================
+    # Callbacks
+    # ==================================================
+
+    def _on_DI_change(self, val):
+        payload = None
+        if self._cache_tol > 0:
+            payload = self._cache_get_nearest(val, self._cache_tol)
+
+        if payload is None:
+            # Lazy compute full statewise summary once
+            chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, val)
+            global_summaries = summaries_from_statewise_counts(chrom_counts)
+
+            per_chr = {}
+            for idx in self.chrom_indices:
+                per_chr[idx] = summaries_from_statewise_counts([chrom_counts[idx]])
+
+            payload = (global_summaries, chrom_retained, per_chr)
+            self._cache_set(val, payload)
+
+        global_summaries, self.chrom_retained, per_chr = payload
+        self.global_HI = global_summaries[0]
+
+        # Update plotted data for each chromosome
+        for idx in self.chrom_indices:
+            summaries = per_chr[idx]
+            self.chrom_summaries[idx] = summaries
+
+            for line, summary in zip(self.lines[idx], summaries):
+                line.set_ydata(summary[self.indHIorder])
+
+            self.global_hi_lines[idx].set_ydata(self.global_HI[self.indHIorder])
+
+            num, denom = self.chrom_retained[idx]
+            self.chrom_axes[idx].set_title(
+                f"Chr {idx} | {num:,}/{denom:,} sites",
+                fontsize=10
+            )
+
+        self.fig.canvas.draw_idle()
+
+    def _on_font_change(self, val):
+        self.indNameFont = int(val)
+        labels = np.array(self.IndNickNames)[self.indHIorder]
+
+        for ax in self.axes.flatten()[:len(self.chrom_indices)]:
+            ax.set_xticklabels(labels, fontsize=self.indNameFont)
+
+        self.fig.canvas.draw_idle()
+
+    def _on_reorder(self, event=None):
+        """
+        Reorder individuals by *current* whole-genome HI (statewise),
+        without recomputing anything expensive.
+        """
+        self.indHIorder = np.argsort(self.global_HI)
+
+        labels = np.array(self.IndNickNames)[self.indHIorder]
+
+        for idx in self.chrom_indices:
+            # global HI overlay
+            self.global_hi_lines[idx].set_ydata(self.global_HI[self.indHIorder])
+
+            # chromosome lines
+            summaries = self.chrom_summaries[idx]
+            for line, summary in zip(self.lines[idx], summaries):
+                line.set_ydata(summary[self.indHIorder])
+
+        for ax in self.axes.flatten()[:len(self.chrom_indices)]:
+            ax.set_xticks(
+                np.arange(len(labels)),
+                labels,
+                fontsize=self.indNameFont,
+                ha="right"
+            )
+
+        self.fig.canvas.draw_idle()
+
 """________________________________________ END GenomeMultiSummaryPlot ___________________"""
 
 
 """________________________________________ START GenomicDeFinettiPlot ___________________"""
 
 
-class GenomicDeFinettiPlot:
+class OLDGenomicDeFinettiPlot:
     """
     Plots a genomic de Finetti plot with DI filtering and interactive widgets.
     Cursor hover displays individual IDs.
@@ -1486,12 +2758,345 @@ class GenomicDeFinettiPlot:
 
         self.ax.format_coord = format_coord
 
+
+import numpy as np
+import bisect
+import time
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+from matplotlib.patches import Polygon
+from matplotlib.colors import to_rgb
+
+class GenomicDeFinettiPlot:
+    """
+    Plots a genomic de Finetti plot with DI filtering and interactive widgets.
+    Cursor hover displays individual IDs.
+
+    Drop-in extension:
+      - optional incremental cache prefill using StatewiseDIIncrementalCache
+      - DI slider uses cached results (nearest match within tol)
+      - keeps output + hover behaviour the same
+
+    Uses:
+      - summaries_from_statewise_counts(statewise counts)
+      - StatewiseDIIncrementalCache (fast prefill)
+    """
+
+    def __init__(
+        self,
+        dPol,
+        *,
+        prefill_cache=False,      # NEW
+        prefill_step=None,        # NEW
+        cache_tol=None,           # NEW
+        progress=None,          # NEW: "text" | "none"
+    ):
+        self.dPol = dPol
+
+        # ---- initial state ----
+        self.marker_size = 60
+        self.indHIorder = np.arange(len(dPol.indNames))
+
+        # ---- cache (per instance) ----
+        # maps DI_value(float) -> (summaries, DInumer, DIdenom)
+        self._cache = {}
+        self._cache_keys_sorted = []
+
+        def _cache_set(di, payload):
+            di = float(di)
+            if di not in self._cache:
+                bisect.insort(self._cache_keys_sorted, di)
+            self._cache[di] = payload
+
+        def _cache_get_nearest(di, tol):
+            if not self._cache_keys_sorted:
+                return None
+            di = float(di)
+            keys = self._cache_keys_sorted
+            j = bisect.bisect_left(keys, di)
+
+            candidates = []
+            if 0 <= j < len(keys):
+                candidates.append(keys[j])
+            if 0 <= j - 1 < len(keys):
+                candidates.append(keys[j - 1])
+
+            best = None
+            best_dist = None
+            for k in candidates:
+                dist = abs(k - di)
+                if best_dist is None or dist < best_dist:
+                    best = k
+                    best_dist = dist
+
+            if best is None or best_dist is None or best_dist > tol:
+                return None
+            return self._cache[best]
+
+        self._cache_set = _cache_set
+        self._cache_get_nearest = _cache_get_nearest
+
+        # ---- initial summaries (no DI filter) ----
+        # Keep your original semantics, but compute via statewise so cache path matches exactly.
+        chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
+        self.summaries = summaries_from_statewise_counts(chrom_counts)
+        self.DInumer = sum(n for n, _ in chrom_retained)
+        self.DIdenom = sum(d for _, d in chrom_retained)
+
+        # unpack summaries
+        self.HOM1 = self.summaries[1]
+        self.HET  = self.summaries[2]
+        self.HOM2 = self.summaries[3]
+        self.U    = self.summaries[4]
+
+        # ---- figure & axes ----
+        self.fig, self.ax = plt.subplots(figsize=(10, 10))
+        self._setup_axes()
+        self.ax.set_title('Genomic de Finetti; no DI filter')
+
+        # background
+        self._draw_triangle()
+        self._draw_hwe_curve()
+
+        # points
+        self.scatter = self._draw_points()
+
+        # widgets
+        self._init_widgets()
+
+        # ---- OPTIONAL: prefill incremental cache ----
+        if prefill_cache:
+            DI_span = get_DI_span(self.dPol)
+            di_min, di_max = float(DI_span[0]), float(DI_span[1])
+
+            if prefill_step is None:
+                span = di_max - di_min
+                prefill_step = span / 200.0 if span > 0 else 1.0
+
+            if cache_tol is None:
+                cache_tol = float(prefill_step) / 2.0
+
+            # Build DI grid including endpoints
+            if di_max > di_min:
+                n_steps = int(np.floor((di_max - di_min) / prefill_step))
+                di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
+                if not di_values or di_values[-1] < di_max:
+                    di_values.append(di_max)
+            else:
+                di_values = [di_min]
+
+            di_grid = np.asarray(di_values, dtype=float)
+
+            inc = StatewiseDIIncrementalCache(
+                self.dPol,
+                di_grid=di_grid,
+                progress=("text" if progress == "text" else None),
+                label="GenomicDeFinetti cache prefill",
+            ).prefill()
+
+            # Store summaries snapshots only (small memory)
+            for di_key, (chrom_counts, chrom_retained) in inc._snapshots.items():
+                summaries = summaries_from_statewise_counts(chrom_counts)
+                DInumer = sum(n for n, _ in chrom_retained)
+                DIdenom = sum(d for _, d in chrom_retained)
+                self._cache_set(di_key, (summaries, DInumer, DIdenom))
+
+            self._cache_tol = float(cache_tol)
+        else:
+            self._cache_tol = 0.0
+
+        # coordinate display
+        self._install_format_coord()
+
+        plt.show()
+
+    # --------------------------------------------------
+    # Helpers
+    # --------------------------------------------------
+
+    @staticmethod
+    def _to_triangle_coords(hom1, het, hom2):
+        x = hom2 + 0.5 * het
+        y = (np.sqrt(3) / 2) * het
+        return x, y
+
+    def _update_title(self, DIval):
+        prop = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
+        self.ax.set_title(
+            "Genomic de Finetti plot  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(DIval, self.DInumer, 100 * prop),
+            fontsize=12,
+            pad=12
+        )
+
+    # --------------------------------------------------
+    # Axes / background
+    # --------------------------------------------------
+
+    def _setup_axes(self):
+        self.ax.set_aspect("equal")
+        self.ax.set_xlim(-0.05, 1.05)
+        self.ax.set_ylim(-0.05, np.sqrt(3) / 2 + 0.05)
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        for spine in self.ax.spines.values():
+            spine.set_visible(False)
+
+        self.ax.set_title("Genomic de Finetti plot")
+
+    def _draw_triangle(self):
+        h = np.sqrt(3) / 2
+        triangle = np.array([[0, 0], [1, 0], [0.5, h]])
+        self.ax.add_patch(
+            Polygon(triangle, closed=True, fill=False, lw=1.2, color="black")
+        )
+
+        self.ax.text(0, -0.04, "HOM1", ha="center", va="top", fontsize=9)
+        self.ax.text(1, -0.04, "HOM2", ha="center", va="top", fontsize=9)
+        self.ax.text(0.5, h + 0.03, "HET", ha="center", va="bottom", fontsize=9)
+
+    def _draw_hwe_curve(self):
+        p = np.linspace(0, 1, 400)
+        hom1 = p**2
+        het  = 2 * p * (1 - p)
+        hom2 = (1 - p)**2
+
+        x, y = self._to_triangle_coords(hom1, het, hom2)
+        self.ax.plot(x, y, color="black", lw=0.8, alpha=0.5)
+
+    # --------------------------------------------------
+    # Points
+    # --------------------------------------------------
+
+    def _blend_colours(self):
+        weights = np.column_stack([self.HOM1, self.HET, self.HOM2, self.U])
+
+        base_colours = np.array([
+            to_rgb(diemColours[1]),  # HOM1
+            to_rgb(diemColours[2]),  # HET
+            to_rgb(diemColours[3]),  # HOM2
+            to_rgb(diemColours[0]),  # U
+        ])  # (4,3)
+
+        rgb = weights @ base_colours
+        rgb = np.clip(rgb, 0.0, 1.0)
+        return rgb
+
+    def _draw_points(self):
+        x, y = self._to_triangle_coords(
+            self.HOM1[self.indHIorder],
+            self.HET[self.indHIorder],
+            self.HOM2[self.indHIorder],
+        )
+        colours = self._blend_colours()[self.indHIorder]
+
+        return self.ax.scatter(
+            x, y,
+            s=self.marker_size,
+            c=colours,
+            edgecolor="black",
+            linewidth=0.3,
+        )
+
+    def _update_points(self):
+        self.HOM1 = self.summaries[1]
+        self.HET  = self.summaries[2]
+        self.HOM2 = self.summaries[3]
+        self.U    = self.summaries[4]
+
+        x, y = self._to_triangle_coords(
+            self.HOM1[self.indHIorder],
+            self.HET[self.indHIorder],
+            self.HOM2[self.indHIorder],
+        )
+
+        self.scatter.set_offsets(np.column_stack([x, y]))
+        self.scatter.set_facecolors(self._blend_colours()[self.indHIorder])
+
+    # --------------------------------------------------
+    # Widgets
+    # --------------------------------------------------
+
+    def _init_widgets(self):
+        DI_span = get_DI_span(self.dPol)
+        self.fig.subplots_adjust(bottom=0.25)
+
+        ax_DI = self.fig.add_axes([0.15, 0.12, 0.7, 0.03])
+        self.DI_slider = Slider(
+            ax_DI, "DI",
+            DI_span[0], DI_span[1],
+            valinit=DI_span[0]
+        )
+        self.DI_slider.on_changed(self.DIupdate)
+
+        ax_SZ = self.fig.add_axes([0.25, 0.10, 0.1, 0.03])
+        self.size_slider = Slider(
+            ax_SZ, "Symbol size",
+            10, 300,
+            valinit=self.marker_size
+        )
+        self.size_slider.on_changed(self.SIZEupdate)
+
+    # --------------------------------------------------
+    # Callbacks
+    # --------------------------------------------------
+
+    def DIupdate(self, val):
+        payload = None
+        if self._cache_tol > 0:
+            payload = self._cache_get_nearest(val, self._cache_tol)
+
+        if payload is None:
+            # Lazy compute via statewise (consistent with cached path)
+            chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, val)
+            summaries = summaries_from_statewise_counts(chrom_counts)
+            DInumer = sum(n for n, _ in chrom_retained)
+            DIdenom = sum(d for _, d in chrom_retained)
+
+            payload = (summaries, DInumer, DIdenom)
+            self._cache_set(val, payload)
+
+        self.summaries, self.DInumer, self.DIdenom = payload
+
+        # unpack (important)
+        self.HOM1 = self.summaries[1]
+        self.HET  = self.summaries[2]
+        self.HOM2 = self.summaries[3]
+        self.U    = self.summaries[4]
+
+        self._update_points()
+        self._update_title(val)
+        self.fig.canvas.draw_idle()
+
+    def SIZEupdate(self, val):
+        self.marker_size = val
+        self.scatter.set_sizes(np.full(len(self.dPol.indNames), val))
+        self.fig.canvas.draw_idle()
+
+    # --------------------------------------------------
+    # Coordinate display
+    # --------------------------------------------------
+
+    def _install_format_coord(self):
+        tol = 0.03
+
+        def format_coord(x, y):
+            fallback = "\u2007" * 30
+            pts = self.scatter.get_offsets()
+            d = np.hypot(pts[:, 0] - x, pts[:, 1] - y)
+            i = np.argmin(d)
+            if d[i] < tol:
+                return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
+            return fallback
+
+        self.ax.format_coord = format_coord
+
 """________________________________________ END GenomicDeFinettiPlot ___________________"""
 
 
 """________________________________________ START GenomicMultiDeFinettiPlot ___________________"""
 
-class GenomicMultiDeFinettiPlot:
+class OLDGenomicMultiDeFinettiPlot:
     """
     Multiple de Finetti plots, one per chromosome,
     all controlled by a shared DI slider and size slider.
@@ -1745,13 +3350,359 @@ class GenomicMultiDeFinettiPlot:
         return valid
 
 
+import numpy as np
+import bisect
+from matplotlib.widgets import Slider
+from matplotlib.patches import Polygon
+from matplotlib.colors import to_rgb
+import matplotlib.pyplot as plt
+
+class GenomicMultiDeFinettiPlot:
+    """
+    Multiple de Finetti plots, one per chromosome,
+    all controlled by a shared DI slider and size slider.
+
+    Drop-in extension:
+      - optional incremental cache prefill using StatewiseDIIncrementalCache
+      - DI slider uses cached results (nearest match within tol)
+      - output + hover semantics unchanged
+
+    Uses statewise_genomes_summary_given_DI + summaries_from_statewise_counts.
+    """
+
+    def __init__(
+        self,
+        dPol,
+        chrom_indices,
+        max_cols=3,
+        *,
+        prefill_cache=False,      # NEW
+        prefill_step=None,        # NEW
+        cache_tol=None,           # NEW
+        progress=None,          # NEW: "text" | "none"
+    ):
+        self.dPol = dPol
+        self.chrom_indices = self._validate_chrom_indices(chrom_indices)
+        self.max_cols = max_cols
+
+        self.marker_size = 60
+        self.n_ind = len(dPol.indNames)
+        self.indHIorder = np.arange(self.n_ind)
+
+        # ---------- cache (per instance) ----------
+        # maps DI(float) -> (chrom_counts, chrom_retained)
+        self._cache = {}
+        self._cache_keys_sorted = []
+        self._cache_tol = 0.0
+
+        def _cache_set(di, payload):
+            di = float(di)
+            if di not in self._cache:
+                bisect.insort(self._cache_keys_sorted, di)
+            self._cache[di] = payload
+
+        def _cache_get_nearest(di, tol):
+            if not self._cache_keys_sorted:
+                return None
+            di = float(di)
+            keys = self._cache_keys_sorted
+            j = bisect.bisect_left(keys, di)
+
+            candidates = []
+            if 0 <= j < len(keys):
+                candidates.append(keys[j])
+            if 0 <= j - 1 < len(keys):
+                candidates.append(keys[j - 1])
+
+            best = None
+            best_dist = None
+            for k in candidates:
+                dist = abs(k - di)
+                if best_dist is None or dist < best_dist:
+                    best = k
+                    best_dist = dist
+
+            if best is None or best_dist is None or best_dist > tol:
+                return None
+            return self._cache[best]
+
+        self._cache_set = _cache_set
+        self._cache_get_nearest = _cache_get_nearest
+
+        # ---------- initial statewise computation ----------
+        self.chrom_counts, self.chrom_retained = \
+            statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
+
+        # global summaries (authoritative ordering)
+        self.global_summaries = summaries_from_statewise_counts(self.chrom_counts)
+        self.global_HI = self.global_summaries[0]
+        self.indHIorder = np.argsort(self.global_HI)
+
+        # ---------- layout ----------
+        n_plots = len(self.chrom_indices)
+        n_cols = min(self.max_cols, n_plots)
+        n_rows = int(np.ceil(n_plots / n_cols))
+
+        self.fig, self.axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(4.8 * n_cols, 4.6 * n_rows),
+            squeeze=False
+        )
+
+        self.fig.subplots_adjust(
+            left=0.06, right=0.98,
+            top=0.92, bottom=0.32,
+            hspace=0.45, wspace=0.25
+        )
+
+        # ---------- draw ----------
+        self.scatters = {}
+        self.chrom_axes = {}
+
+        axes_flat = self.axes.flatten()
+
+        for ax, idx in zip(axes_flat, self.chrom_indices):
+            self.chrom_axes[idx] = ax
+            self._setup_axes(ax)
+            self._draw_triangle(ax)
+            self._draw_hwe_curve(ax)
+
+            summaries = summaries_from_statewise_counts([self.chrom_counts[idx]])
+            _, HOM1, HET, HOM2, U = summaries
+
+            x, y = self._to_triangle_coords(
+                HOM1[self.indHIorder],
+                HET[self.indHIorder],
+                HOM2[self.indHIorder]
+            )
+
+            colours = self._blend_colours(HOM1, HET, HOM2, U)
+
+            sc = ax.scatter(
+                x, y,
+                s=self.marker_size,
+                c=colours[self.indHIorder],
+                edgecolor="black",
+                linewidth=0.3
+            )
+
+            num, denom = self.chrom_retained[idx]
+            ax.set_title(f"Chr {idx} | {num:,}/{denom:,} sites", fontsize=10)
+
+            self.scatters[idx] = sc
+
+        for ax in axes_flat[len(self.chrom_indices):]:
+            ax.axis("off")
+
+        # ---------- widgets ----------
+        self._init_widgets()
+
+        # ---------- OPTIONAL: prefill incremental cache ----------
+        if prefill_cache:
+            DI_span = get_DI_span(self.dPol)
+            di_min, di_max = float(DI_span[0]), float(DI_span[1])
+
+            if prefill_step is None:
+                span = di_max - di_min
+                prefill_step = span / 200.0 if span > 0 else 1.0
+
+            if cache_tol is None:
+                cache_tol = float(prefill_step) / 2.0
+
+            # Build DI grid including endpoints
+            if di_max > di_min:
+                n_steps = int(np.floor((di_max - di_min) / prefill_step))
+                di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
+                if not di_values or di_values[-1] < di_max:
+                    di_values.append(di_max)
+            else:
+                di_values = [di_min]
+
+            di_grid = np.asarray(di_values, dtype=float)
+
+            inc = StatewiseDIIncrementalCache(
+                self.dPol,
+                di_grid=di_grid,
+                progress=("text" if progress == "text" else None),
+                label="GenomicMultiDeFinetti cache prefill",
+            ).prefill()
+
+            # Store snapshots (small memory compared to per-site)
+            for di_key, payload in inc._snapshots.items():
+                self._cache_set(di_key, payload)
+
+            self._cache_tol = float(cache_tol)
+
+        # ---------- hover ----------
+        self._install_format_coord()
+
+        plt.show()
+
+    # ======================================================
+    # Helpers
+    # ======================================================
+
+    @staticmethod
+    def _to_triangle_coords(hom1, het, hom2):
+        x = hom2 + 0.5 * het
+        y = (np.sqrt(3) / 2) * het
+        return x, y
+
+    def _blend_colours(self, HOM1, HET, HOM2, U):
+        weights = np.column_stack([HOM1, HET, HOM2, U])
+        base = np.array([
+            to_rgb(diemColours[1]),
+            to_rgb(diemColours[2]),
+            to_rgb(diemColours[3]),
+            to_rgb(diemColours[0]),
+        ])
+        return np.clip(weights @ base, 0, 1)
+
+    def _setup_axes(self, ax):
+        ax.set_aspect("equal")
+        ax.set_xlim(-0.05, 1.05)
+        ax.set_ylim(-0.05, np.sqrt(3)/2 + 0.05)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for s in ax.spines.values():
+            s.set_visible(False)
+
+    def _draw_triangle(self, ax):
+        h = np.sqrt(3)/2
+        ax.add_patch(Polygon([[0,0],[1,0],[0.5,h]], fill=False, lw=1.2))
+        ax.text(0, -0.04, "HOM1", ha="center", va="top", fontsize=8)
+        ax.text(1, -0.04, "HOM2", ha="center", va="top", fontsize=8)
+        ax.text(0.5, h + 0.03, "HET", ha="center", va="bottom", fontsize=8)
+
+    def _draw_hwe_curve(self, ax):
+        p = np.linspace(0,1,400)
+        x, y = self._to_triangle_coords(p*p, 2*p*(1-p), (1-p)**2)
+        ax.plot(x, y, color="black", lw=0.8, alpha=0.5)
+
+    # ======================================================
+    # Widgets
+    # ======================================================
+
+    def _init_widgets(self):
+        DI_span = get_DI_span(self.dPol)
+
+        ax_DI = self.fig.add_axes([0.15, 0.20, 0.70, 0.035])
+        self.DI_slider = Slider(ax_DI, "DI", *DI_span, valinit=DI_span[0])
+        self.DI_slider.on_changed(self._on_DI_change)
+
+        ax_SZ = self.fig.add_axes([0.25, 0.16, 0.1, 0.03])
+        self.size_slider = Slider(ax_SZ, "Symbol size", 10, 300, valinit=self.marker_size)
+        self.size_slider.on_changed(self._on_size_change)
+
+    # ======================================================
+    # Callbacks
+    # ======================================================
+
+    def _on_DI_change(self, val):
+        payload = None
+        if self._cache_tol > 0:
+            payload = self._cache_get_nearest(val, self._cache_tol)
+
+        if payload is None:
+            # fallback (no prefill or outside tol): compute and (optionally) cache
+            chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, val)
+            payload = (chrom_counts, chrom_retained)
+            # opportunistic cache
+            self._cache_set(val, payload)
+
+        self.chrom_counts, self.chrom_retained = payload
+
+        # global summaries (authoritative ordering)
+        self.global_summaries = summaries_from_statewise_counts(self.chrom_counts)
+        self.indHIorder = np.argsort(self.global_summaries[0])
+
+        totNumer = 0
+        totDenom = 0
+
+        for idx in self.chrom_indices:
+            summaries = summaries_from_statewise_counts([self.chrom_counts[idx]])
+            _, H1, Ht, H2, U = summaries
+
+            x, y = self._to_triangle_coords(
+                H1[self.indHIorder],
+                Ht[self.indHIorder],
+                H2[self.indHIorder]
+            )
+
+            sc = self.scatters[idx]
+            sc.set_offsets(np.column_stack([x, y]))
+            sc.set_facecolors(self._blend_colours(H1, Ht, H2, U)[self.indHIorder])
+
+            num, denom = self.chrom_retained[idx]
+            self.chrom_axes[idx].set_title(
+                f"Chr {idx} | {num:,}/{denom:,} sites", fontsize=10
+            )
+
+            totNumer += num
+            totDenom += denom
+
+        # (you previously computed prop but didn't display it; keep behaviour unchanged)
+        self.fig.canvas.draw_idle()
+
+    def _on_size_change(self, val):
+        self.marker_size = int(val)
+        for sc in self.scatters.values():
+            sc.set_sizes(np.full(self.n_ind, self.marker_size))
+        self.fig.canvas.draw_idle()
+
+    # ======================================================
+    # Hover
+    # ======================================================
+
+    def _install_format_coord(self):
+        tol = 0.03
+        names = self.dPol.indNames
+
+        for idx, sc in self.scatters.items():
+            ax = self.chrom_axes[idx]
+
+            def make_fmt(scatter):
+                def fmt(x, y):
+                    pts = scatter.get_offsets()
+                    d = np.hypot(pts[:, 0] - x, pts[:, 1] - y)
+                    i = np.argmin(d)
+                    if d[i] < tol:
+                        return f"IndID: {names[self.indHIorder[i]]}"
+                    return "\u2007" * 30
+                return fmt
+
+            ax.format_coord = make_fmt(sc)
+
+    # ======================================================
+    # Validation
+    # ======================================================
+
+    def _validate_chrom_indices(self, chrom_indices):
+        max_idx = len(self.dPol.chrLengths) - 1
+        valid = []
+        rejected = []
+        for i in chrom_indices:
+            try:
+                ii = int(i)
+                if 0 <= ii <= max_idx:
+                    valid.append(ii)
+                else:
+                    rejected.append(i)
+            except Exception:
+                rejected.append(i)
+
+        if rejected:
+            print("GenomicMultiDeFinettiPlot: rejected chromosome indices:", rejected)
+        if not valid:
+            raise ValueError("No valid chromosome indices")
+        return valid
 
 """________________________________________ END GenomicMultiDeFinettiPlot ___________________"""
 
 
 """________________________________________ START GenomicContributionsPlot ___________________"""
 
-class GenomicContributionsPlot:
+class OLDGenomicContributionsPlot:
     """
     Plots per-chromosome genomic contributions (HOM1, HET, HOM2, U, excluded)
     with DI filtering and interactive widgets.
@@ -1956,9 +3907,686 @@ class GenomicContributionsPlot:
 
 
 
+import numpy as np
+import bisect
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+
+class GenomicContributionsPlot:
+    """
+    Plots per-chromosome genomic contributions (HOM1, HET, HOM2, U, excluded)
+    with DI filtering and interactive widgets.
+
+    Drop-in extension:
+      - optional incremental cache prefill using StatewiseDIIncrementalCache
+      - DI slider uses cached statewise snapshots (nearest within tol)
+      - output unchanged
+
+    Uses statewise_genomes_summary_given_DI (or cached equivalent).
+    """
+
+    def __init__(
+        self,
+        dPol,
+        chrom_indices=None,
+        *,
+        prefill_cache=False,      # NEW
+        prefill_step=None,        # NEW
+        cache_tol=None,           # NEW
+        progress=None,          # NEW: "text" | "none"
+    ):
+        self.dPol = dPol
+        self.chrom_indices = chrom_indices
+        self.fontsize = 8
+
+        # ---- cache (per instance) ----
+        # maps DI(float) -> (chrom_counts, chrom_retained)
+        self._cache = {}
+        self._cache_keys_sorted = []
+        self._cache_tol = 0.0
+
+        def _cache_set(di, payload):
+            di = float(di)
+            if di not in self._cache:
+                bisect.insort(self._cache_keys_sorted, di)
+            self._cache[di] = payload
+
+        def _cache_get_nearest(di, tol):
+            if not self._cache_keys_sorted:
+                return None
+            di = float(di)
+            keys = self._cache_keys_sorted
+            j = bisect.bisect_left(keys, di)
+
+            candidates = []
+            if 0 <= j < len(keys):
+                candidates.append(keys[j])
+            if 0 <= j - 1 < len(keys):
+                candidates.append(keys[j - 1])
+
+            best = None
+            best_dist = None
+            for k in candidates:
+                dist = abs(k - di)
+                if best_dist is None or dist < best_dist:
+                    best = k
+                    best_dist = dist
+
+            if best is None or best_dist is None or best_dist > tol:
+                return None
+            return self._cache[best]
+
+        self._cache_set = _cache_set
+        self._cache_get_nearest = _cache_get_nearest
+
+        # --------------------------------------------------
+        # Initial compute (no filter)
+        # --------------------------------------------------
+        self.DInumer = 0
+        self.DIdenom = 0
+        self._compute_contributions(float("-inf"))
+
+        # ---- figure & axes ----
+        self.fig, self.ax = plt.subplots(figsize=(10, 5))
+        self.ax.format_coord = None
+        self.fig.subplots_adjust(bottom=0.40, right=0.85)
+
+        self._draw_bars()
+        self._init_widgets()
+
+        # --------------------------------------------------
+        # OPTIONAL: prefill incremental cache
+        # --------------------------------------------------
+        if prefill_cache:
+            DI_span = get_DI_span(self.dPol)
+            di_min, di_max = float(DI_span[0]), float(DI_span[1])
+
+            if prefill_step is None:
+                span = di_max - di_min
+                prefill_step = span / 200.0 if span > 0 else 1.0
+
+            if cache_tol is None:
+                cache_tol = float(prefill_step) / 2.0
+
+            # Build DI grid including endpoints
+            if di_max > di_min:
+                n_steps = int(np.floor((di_max - di_min) / prefill_step))
+                di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
+                if not di_values or di_values[-1] < di_max:
+                    di_values.append(di_max)
+            else:
+                di_values = [di_min]
+
+            di_grid = np.asarray(di_values, dtype=float)
+
+            inc = StatewiseDIIncrementalCache(
+                self.dPol,
+                di_grid=di_grid,
+                progress=("text" if progress == "text" else None),
+                label="GenomicContributions cache prefill",
+            ).prefill()
+
+            # Store snapshots
+            for di_key, payload in inc._snapshots.items():
+                self._cache_set(di_key, payload)
+
+            self._cache_tol = float(cache_tol)
+
+        plt.show()
+
+    # --------------------------------------------------
+    # Core computation
+    # --------------------------------------------------
+
+    def _compute_contributions(self, DIval):
+        """
+        Compute contributions at DIval.
+        Uses cache if available (nearest within tol), otherwise computes directly.
+        """
+
+        payload = None
+        if self._cache_tol > 0:
+            payload = self._cache_get_nearest(DIval, self._cache_tol)
+
+        if payload is None:
+            chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, DIval)
+            payload = (chrom_counts, chrom_retained)
+            # opportunistic cache (even without prefill, harmless)
+            self._cache_set(DIval, payload)
+        else:
+            chrom_counts, chrom_retained = payload
+
+        # --------------------------------------------------
+        # Restrict chromosomes if requested (same as your code)
+        # --------------------------------------------------
+        if self.chrom_indices is not None:
+            kept = []
+            n_chr = len(chrom_counts)
+
+            for ci in self.chrom_indices:
+                if isinstance(ci, (int, np.integer)) and 0 <= int(ci) < n_chr:
+                    kept.append(int(ci))
+
+            if not kept:
+                raise ValueError("GenomicContributionsPlot: no valid chromosome indices")
+
+        else:
+            kept = range(len(chrom_counts))
+
+        # --------------------------------------------------
+        # Aggregate over kept chromosomes
+        # --------------------------------------------------
+        self.DInumer = 0
+        self.DIdenom = 0
+
+        kept_list = list(kept)
+        self.chrom_labels = []
+        self.props = np.zeros((len(kept_list), 5))  # HOM1, HET, HOM2, U, excluded
+
+        for out_i, chr_i in enumerate(kept_list):
+            chr_name = Chr_Nickname(self.dPol.chrNames[chr_i])
+            self.chrom_labels.append(chr_name)
+
+            counts = chrom_counts[chr_i]
+            kept_sites, total_sites = chrom_retained[chr_i]
+
+            self.DInumer += kept_sites
+            self.DIdenom += total_sites
+
+            c0 = float(np.sum(counts["counts0"]))
+            c1 = float(np.sum(counts["counts1"]))
+            c2 = float(np.sum(counts["counts2"]))
+            c3 = float(np.sum(counts["counts3"]))
+
+            total_alleles = float(total_sites) * float(np.sum(self.dPol.chrPloidies[chr_i]))
+            if total_alleles == 0:
+                continue
+
+            self.props[out_i, :] = [
+                c1 / total_alleles,                                   # HOM1
+                c2 / total_alleles,                                   # HET
+                c3 / total_alleles,                                   # HOM2
+                c0 / total_alleles,                                   # U
+                (1.0 - kept_sites / total_sites) if total_sites else 0
+            ]
+
+        self.current_DI = float(DIval)
+
+    # --------------------------------------------------
+    # Drawing
+    # --------------------------------------------------
+
+    def _draw_bars(self):
+        self.ax.clear()
+
+        x = np.arange(len(self.chrom_labels))
+        bottoms = np.zeros(len(x))
+
+        colours = [
+            diemColours[1],  # HOM1
+            diemColours[2],  # HET
+            diemColours[3],  # HOM2
+            "lightgray",     # U
+            "white",         # excluded
+        ]
+
+        labels = ["HOM1", "HET", "HOM2", "U", "<DI"]
+
+        for i in range(5):
+            self.ax.bar(
+                x,
+                self.props[:, i],
+                bottom=bottoms,
+                color=colours[i],
+                edgecolor="black" if i == 4 else None,
+                linewidth=0.4 if i == 4 else 0,
+                label=labels[i],
+            )
+            bottoms += self.props[:, i]
+
+        self.ax.set_xlim(-0.5, len(x) - 0.5)
+        self.ax.set_ylim(0, 1)
+
+        self.ax.set_xticks(x)
+        self.ax.set_xticklabels(
+            self.chrom_labels,
+            rotation=90,
+            fontsize=self.fontsize,
+            ha="center",
+        )
+
+        self.ax.set_ylabel("Proportion of SNVs")
+
+        prop = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
+
+        self.ax.set_title(
+            "Genomic contributions plot  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(self.current_DI, self.DInumer, 100 * prop),
+            fontsize=12,
+            pad=12
+        )
+
+        self.ax.legend(
+            loc="upper left",
+            bbox_to_anchor=(1.01, 1.0),
+            fontsize=8,
+            frameon=False,
+        )
+
+        self.fig.canvas.draw_idle()
+
+    # --------------------------------------------------
+    # Widgets
+    # --------------------------------------------------
+
+    def _init_widgets(self):
+        DI_span = get_DI_span(self.dPol)
+
+        ax_DI = self.fig.add_axes([0.15, 0.20, 0.70, 0.03])
+        self.DI_slider = Slider(
+            ax_DI,
+            "DI",
+            DI_span[0],
+            DI_span[1],
+            valinit=DI_span[0],
+        )
+        self.DI_slider.on_changed(self.DIupdate)
+
+        ax_FS = self.fig.add_axes([0.15, 0.13, 0.15, 0.03])
+        self.font_slider = Slider(
+            ax_FS,
+            "Label font size",
+            4,
+            16,
+            valinit=self.fontsize,
+            valstep=1,
+        )
+        self.font_slider.on_changed(self.FONTupdate)
+
+    # --------------------------------------------------
+    # Callbacks
+    # --------------------------------------------------
+
+    def DIupdate(self, val):
+        self._compute_contributions(val)
+        self._draw_bars()
+
+    def FONTupdate(self, val):
+        self.fontsize = int(val)
+        self._draw_bars()
+
+
 
 """________________________________________ END GenomicContributions__________________"""
 
+
+
+"""________________________________________ START IndGenomicContributions ___________________"""
+
+import numpy as np
+import bisect
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider, Button
+
+class IndGenomicContributionsPlot:
+    """
+    Stacked-bar genomic contributions per INDIVIDUAL (HOM1, HET, HOM2, U, excluded),
+    with DI filtering and widgets.
+
+    - bars correspond to individuals (like GenomeSummaryPlot focus)
+    - visuals correspond to GenomicContributionsPlot
+    - reorder-by-HI button (HI computed at current DI)
+    - optional incremental cache prefill via StatewiseDIIncrementalCache
+
+    Uses: statewise_genomes_summary_given_DI
+    """
+
+    def __init__(
+        self,
+        dPol,
+        *,
+        prefill_cache=False,      # NEW
+        prefill_step=None,        # NEW
+        cache_tol=None,           # NEW
+        progress=None,          # NEW: "text" | "none"
+    ):
+        self.dPol = dPol
+
+        # labels + ordering
+        self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]
+        self.indNameFont = 6
+        self.indHIorder = np.arange(len(dPol.indNames), dtype=int)
+
+        # plotted state
+        self.current_DI = float("-inf")
+        self.DInumer = 0
+        self.DIdenom = 0
+        self.global_HI = None
+        self.props = None  # (nInd, 5)
+
+        # ---- cache (per instance) ----
+        # maps DI(float) -> (chrom_counts, chrom_retained)
+        self._cache = {}
+        self._cache_keys_sorted = []
+        self._cache_tol = 0.0
+
+        def _cache_set(di, payload):
+            di = float(di)
+            if di not in self._cache:
+                bisect.insort(self._cache_keys_sorted, di)
+            self._cache[di] = payload
+
+        def _cache_get_nearest(di, tol):
+            if not self._cache_keys_sorted:
+                return None
+            di = float(di)
+            keys = self._cache_keys_sorted
+            j = bisect.bisect_left(keys, di)
+
+            candidates = []
+            if 0 <= j < len(keys):
+                candidates.append(keys[j])
+            if 0 <= j - 1 < len(keys):
+                candidates.append(keys[j - 1])
+
+            best = None
+            best_dist = None
+            for k in candidates:
+                dist = abs(k - di)
+                if best_dist is None or dist < best_dist:
+                    best = k
+                    best_dist = dist
+
+            if best is None or best_dist is None or best_dist > tol:
+                return None
+            return self._cache[best]
+
+        self._cache_set = _cache_set
+        self._cache_get_nearest = _cache_get_nearest
+
+        # ---- figure & axes ----
+        self.fig, self.ax = plt.subplots(figsize=(11, 4.8))
+        self.fig.subplots_adjust(bottom=0.35, right=0.88)
+        self.ax.format_coord = None  # no hover
+
+        # ---- initial compute ----
+        self._compute_props(float("-inf"))
+
+        # ---- INITIAL ORDER BY HI (NEW) ----
+        if self.global_HI is not None:
+            self.indHIorder = np.argsort(self.global_HI)
+
+        # ---- draw ----
+        self._draw_bars()
+
+        # ---- widgets ----
+        self._init_widgets()
+
+        # ---- OPTIONAL: incremental cache prefill ----
+        if prefill_cache:
+            DI_span = get_DI_span(self.dPol)
+            di_min, di_max = float(DI_span[0]), float(DI_span[1])
+
+            if prefill_step is None:
+                span = di_max - di_min
+                prefill_step = span / 200.0 if span > 0 else 1.0
+
+            if cache_tol is None:
+                cache_tol = float(prefill_step) / 2.0
+
+            # Build DI grid including endpoints
+            if di_max > di_min:
+                n_steps = int(np.floor((di_max - di_min) / prefill_step))
+                di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
+                if not di_values or di_values[-1] < di_max:
+                    di_values.append(di_max)
+            else:
+                di_values = [di_min]
+
+            di_grid = np.asarray(di_values, dtype=float)
+
+            inc = StatewiseDIIncrementalCache(
+                self.dPol,
+                di_grid=di_grid,
+                progress=("text" if progress == "text" else None),
+                label="IndGenomicContrib cache prefill",
+            ).prefill()
+
+            # Store snapshots
+            for di_key, payload in inc._snapshots.items():
+                self._cache_set(di_key, payload)
+
+            self._cache_tol = float(cache_tol)
+
+        plt.show()
+
+    # --------------------------------------------------
+    # Core computation
+    # --------------------------------------------------
+
+    def _get_statewise_payload(self, DIval):
+        """
+        Return (chrom_counts, chrom_retained) using cache if available.
+        """
+        payload = None
+        if self._cache_tol > 0:
+            payload = self._cache_get_nearest(DIval, self._cache_tol)
+
+        if payload is None:
+            chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, DIval)
+            payload = (chrom_counts, chrom_retained)
+            # opportunistic cache (safe even without prefill)
+            self._cache_set(DIval, payload)
+
+        return payload
+
+    def _compute_props(self, DIval):
+        """
+        Compute per-individual stacked proportions:
+          HOM1, HET, HOM2, U, excluded
+
+        Denominator is TOTAL alleles (including excluded DI-filtered-out sites),
+        so excluded portion is meaningful per individual even under variable ploidy.
+        """
+        chrom_counts, chrom_retained = self._get_statewise_payload(DIval)
+
+        nChr = len(chrom_counts)
+        nInd = chrom_counts[0]["counts0"].shape[0]
+
+        # totals of sites retained/total (SNVs, not alleles) for title
+        self.DInumer = sum(n for (n, _) in chrom_retained)
+        self.DIdenom = sum(d for (_, d) in chrom_retained)
+        self.current_DI = float(DIval)
+
+        # Sum ploidy-weighted counts over chromosomes for each individual
+        sum0 = np.zeros(nInd, dtype=float)
+        sum1 = np.zeros(nInd, dtype=float)
+        sum2 = np.zeros(nInd, dtype=float)
+        sum3 = np.zeros(nInd, dtype=float)
+
+        # Total alleles per individual across ALL sites (retained + excluded)
+        total_alleles_all = np.zeros(nInd, dtype=float)
+
+        for chr_i in range(nChr):
+            c = chrom_counts[chr_i]
+            sum0 += c["counts0"]
+            sum1 += c["counts1"]
+            sum2 += c["counts2"]
+            sum3 += c["counts3"]
+
+            # total alleles for this chromosome for each individual
+            total_sites_chr = chrom_retained[chr_i][1]  # denom
+            w = np.asarray(self.dPol.chrPloidies[chr_i], dtype=float)  # (nInd,)
+            total_alleles_all += float(total_sites_chr) * w
+
+        retained_alleles = sum0 + sum1 + sum2 + sum3
+
+        # Avoid division by 0 (rare but possible)
+        denom = np.where(total_alleles_all > 0, total_alleles_all, 1.0)
+
+        props = np.zeros((nInd, 5), dtype=float)
+        props[:, 0] = sum1 / denom  # HOM1
+        props[:, 1] = sum2 / denom  # HET
+        props[:, 2] = sum3 / denom  # HOM2
+        props[:, 3] = sum0 / denom  # U
+        props[:, 4] = 1.0 - (retained_alleles / denom)  # excluded (DI-filtered-out)
+
+        # Clamp minor floating error
+        props = np.clip(props, 0.0, 1.0)
+
+        self.props = props
+
+        # Compute global HI for reorder-by-HI (authoritative from statewise counts)
+        global_summaries = summaries_from_statewise_counts(chrom_counts)
+        self.global_HI = global_summaries[0]  # (nInd,)
+
+
+
+    # --------------------------------------------------
+    # Drawing
+    # --------------------------------------------------
+
+    def _draw_bars(self):
+
+        self.ax.clear()
+
+        nInd = len(self.dPol.indNames)
+        order = self.indHIorder
+
+        x = np.arange(nInd)
+        bottoms = np.zeros(nInd, dtype=float)
+
+        colours = [
+            diemColours[1],   # HOM1
+            diemColours[2],   # HET
+            diemColours[3],   # HOM2
+            "lightgray",      # U
+            "white",          # excluded
+        ]
+        labels = ["HOM1", "HET", "HOM2", "U", "<DI"]
+
+        for k in range(5):
+            self.ax.bar(
+                x,
+                self.props[order, k],
+                bottom=bottoms,
+                color=colours[k],
+                edgecolor="black" if k == 4 else None,
+                linewidth=0.4 if k == 4 else 0,
+                label=labels[k],
+            )
+            bottoms += self.props[order, k]
+
+        self.ax.set_xlim(-0.5, nInd - 0.5)
+        self.ax.set_ylim(0, 1)
+        self.ax.set_ylabel("Proportion of genotypes")
+
+        # xticks
+        labels = np.array(self.IndNickNames)[order]
+        self.ax.set_xticks(x)
+        self.ax.set_xticklabels(
+            labels,
+            rotation=90,
+            fontsize=self.indNameFont,
+            ha="center",
+        )
+
+        # title
+        prop_sites = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
+        self.ax.set_title(
+            "Individual genomic contributions  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(self.current_DI, self.DInumer, 100 * prop_sites),
+            fontsize=12,
+            pad=12
+        )
+
+        # legend outside
+        self.ax.legend(
+            loc="upper left",
+            bbox_to_anchor=(1.01, 1.0),
+            fontsize=8,
+            frameon=False,
+        )
+
+        self.fig.canvas.draw_idle()
+
+    # --------------------------------------------------
+    # Widgets
+    # --------------------------------------------------
+
+    def _init_widgets(self):
+        DI_span = get_DI_span(self.dPol)
+
+        # DI slider
+        ax_DI = self.fig.add_axes([0.18, 0.18, 0.64, 0.03])
+        self.DI_slider = Slider(
+            ax_DI,
+            "DI",
+            DI_span[0],
+            DI_span[1],
+            valinit=DI_span[0],
+        )
+        self.DI_slider.on_changed(self.DIupdate)
+
+        # font size slider
+        ax_FS = self.fig.add_axes([0.18, 0.11, 0.14, 0.03])
+        self.font_slider = Slider(
+            ax_FS,
+            "Label font",
+            4,
+            16,
+            valinit=self.indNameFont,
+            valstep=1,
+        )
+        self.font_slider.on_changed(self.FONTupdate)
+
+        # reorder button
+        ax_RE = self.fig.add_axes([0.8, 0.025, 0.1, 0.04])#[0.70, 0.105, 0.15, 0.045])# EURG
+        self.reorder_button = Button(
+            ax_RE,
+            "Reorder by HI",
+            hovercolor="0.95",
+            color="red",
+        )
+        self.reorder_button.on_clicked(self.reorder)
+
+    # --------------------------------------------------
+    # Callbacks
+    # --------------------------------------------------
+
+    def DIupdate(self, val):
+
+        # recompute props + HI at this DI
+        self._compute_props(val)
+        
+
+        # keep current ordering unless user presses reorder
+        self._draw_bars()
+
+    def FONTupdate(self, val):
+        self.indNameFont = int(val)
+        self._draw_bars()
+
+    def reorder(self, event=None):
+        """
+        Reorder individuals by HI given the CURRENT DI threshold.
+        """
+
+        if self.global_HI is None:
+            print("  global_HI is None -> returning")
+            return
+
+         # global_HI already corresponds to current DI because DIupdate recomputes it
+        if self.global_HI is None:
+            return
+        self.indHIorder = np.argsort(self.global_HI)
+
+        print("  order AFTER reorder head:", self.indHIorder[:12])
+        print("  HI head (new order):", np.round(HI[self.indHIorder][:10], 4))
+
+        self._draw_bars()
+
+"""________________________________________ END IndGenomicContributions ___________________"""
 
 
 
@@ -2076,7 +4704,7 @@ def _pwmatrix_row(i, G, W):
 
 
 #------------------version without char sidestep-------------------------------
-def _pwmatrix_row_numeric(i, G, W):
+def _OLDpwmatrix_row_numeric(i, G, W):
     """
     Compute one row of the pairwise distance matrix from numeric codes.
     """
@@ -2096,6 +4724,30 @@ def _pwmatrix_row_numeric(i, G, W):
             row[j] = W[ai[valid], aj[valid]].sum() / denom
 
     return i, row
+
+def _pwmatrix_row_numeric(i, G, W):
+    n = G.shape[0]
+    row = np.zeros(n, dtype=float)
+
+    ai = G[i]
+    for j in range(n):
+        aj = G[j]
+
+        if i == j:
+            # Self-comparison: include all retained sites so diagonal is always defined.
+            valid = np.ones_like(ai, dtype=bool)
+        else:
+            # Pairwise: exclude unknowns (0) exactly as before.
+            valid = (ai != 0) & (aj != 0)
+
+        denom = int(valid.sum())
+        if denom == 0:
+            row[j] = np.nan
+        else:
+            row[j] = W[ai[valid], aj[valid]].sum() / denom
+
+    return i, row
+
 
 def PARApwmatrixFromDiemType(
     aDT,
@@ -2184,7 +4836,7 @@ def PARApwmatrixFromDiemType(
 #-------------------------------------------------
 
 
-class diemPairsPlot:
+class OLDdiemPairsPlot:
     """
     Pairwise distance plot using brickDiagram semantics.
 
@@ -2402,6 +5054,422 @@ class diemPairsPlot:
                     return f"{a} × {b} : {d:.3f}"
                 return f"{a} × {b} : NA"
 
+            return fallback
+
+        self.ax.format_coord = format_coord
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib.widgets import Slider, Button
+from matplotlib.colors import LinearSegmentedColormap
+
+# Assumes these exist in your module namespace:
+# - get_DI_span
+# - genomes_summary_given_DI
+# - statewise_genomes_summary_given_DI
+# - summaries_from_statewise_counts
+# - PARApwmatrixFromDiemType
+# - StatewiseDIIncrementalCache (optional)
+# - PairwiseDIIncrementalCache (the incremental helper we added)
+
+class diemPairsPlot:
+    """
+    Pairwise distance plot using BRICK rectangles (no imshow), now with:
+      - DI slider
+      - Reorder by HI button
+      - optional incremental cache prefill (pairwise + optional HI/statewise)
+    """
+
+    def __init__(
+        self,
+        dPol,
+        DIthreshold=float("-inf"),
+        figsize=(9, 6),
+        chrom_indices=None,
+
+        # caching options
+        prefill_cache=False,
+        prefill_step=None,
+        cache_tol=None,
+        progress="text",                 # None | "text"
+        cache_statewise_for_HI=True,   # True recommended if you already have StatewiseDIIncrementalCache
+    ):
+        self.dPol = dPol
+        self.chrom_indices = chrom_indices
+        self.current_DI = float(DIthreshold)
+
+        # ---------- DI span / grid ----------
+        DI_span = get_DI_span(self.dPol)
+        self.di_min, self.di_max = float(DI_span[0]), float(DI_span[1])
+
+        if prefill_step is None:
+            span = self.di_max - self.di_min
+            prefill_step = span / 200.0 if span > 0 else 1.0
+
+        if cache_tol is None:
+            cache_tol = float(prefill_step) / 2.0
+        self._cache_tol = float(cache_tol)
+
+        self.di_grid = self._build_di_grid(self.di_min, self.di_max, float(prefill_step))
+
+        # ---------- caches ----------
+        self._inc_pairwise = None
+        self._inc_statewise = None
+
+        if prefill_cache:
+            # Pairwise incremental cache
+            self._inc_pairwise = PairwiseDIIncrementalCache(
+                self.dPol,
+                di_grid=self.di_grid,
+                chrom_indices=self.chrom_indices,
+                progress=("text" if progress == "text" else None),
+                label="PairsPlot matrix cache prefill",
+                snapshot_dtype=np.float32,
+            ).prefill()
+
+            # Optional HI ordering cache (fast ordering under slider motion)
+            if cache_statewise_for_HI:
+                self._inc_statewise = StatewiseDIIncrementalCache(
+                    self.dPol,
+                    di_grid=self.di_grid,
+                    progress=("text" if progress == "text" else None),
+                    label="PairsPlot HI cache prefill",
+                ).prefill()
+
+        # ---------- figure layout ----------
+        self.fig = plt.figure(figsize=figsize)
+        gs = self.fig.add_gridspec(
+            nrows=1, ncols=2,
+            width_ratios=[20, 1],
+            wspace=0.08
+        )
+        self.ax = self.fig.add_subplot(gs[0, 0])
+        self.cax = self.fig.add_subplot(gs[0, 1])
+
+        # room at bottom for widgets
+        self.fig.subplots_adjust(bottom=0.22)
+
+        # ---------- colormap ----------
+        self.cmap = LinearSegmentedColormap.from_list(
+            "soft_coolwarm",
+            ["#1e90ff", "white", "#fff266", "#ff1a1a"]
+        )
+
+        # ---------- initial compute ----------
+        self._compute_for_DI(self.current_DI, force_reorder=True)
+
+        # ---------- draw once ----------
+        self._setup_axes()
+        self._init_bricks()          # main matrix bricks (persistent)
+        self._init_colour_key()      # colour key bricks (persistent)
+
+        # ---------- widgets ----------
+        self._init_widgets()
+
+        # ---------- hover ----------
+        self._install_format_coord()
+
+        plt.show()
+
+    # =================================================
+    # DI grid helpers
+    # =================================================
+
+    @staticmethod
+    def _build_di_grid(di_min, di_max, step):
+        if di_max > di_min:
+            n_steps = int(np.floor((di_max - di_min) / step))
+            vals = [di_min + k * step for k in range(n_steps + 1)]
+            if not vals or vals[-1] < di_max:
+                vals.append(di_max)
+        else:
+            vals = [di_min]
+        return np.asarray(vals, dtype=float)
+
+    def _nearest_grid_value(self, di):
+        di = float(di)
+        grid = self.di_grid
+        j = int(np.argmin(np.abs(grid - di)))
+        return float(grid[j])
+
+    # =================================================
+    # Computation
+    # =================================================
+
+    def _get_HI_for_DI(self, DIthreshold):
+        # Fast path: statewise incremental cache -> HI from chrom_counts snapshot
+        if self._inc_statewise is not None:
+            di_key = self._nearest_grid_value(DIthreshold)
+            chrom_counts, _chrom_retained = self._inc_statewise._snapshots[di_key]
+            summaries = summaries_from_statewise_counts(chrom_counts)
+            return summaries[0]
+
+        # Fallback: existing global summary
+        summaries, _, _ = genomes_summary_given_DI(self.dPol, DIthreshold)
+        return summaries[0]
+
+    def _get_M_for_DI(self, DIthreshold):
+        if self._inc_pairwise is not None:
+            return self._inc_pairwise.get(DIthreshold)
+
+        # Fallback: your existing parallel matrix builder
+        return PARApwmatrixFromDiemType(
+            self.dPol,
+            DIthreshold=float(DIthreshold),
+            chrom_indices=self.chrom_indices,
+        )
+
+    def _compute_for_DI(self, DIthreshold, *, force_reorder=False):
+        """
+        Compute matrix + (optionally) compute HI ordering.
+        If force_reorder=False, keep existing order and only update M accordingly.
+        """
+        self.current_DI = float(DIthreshold)
+
+        # matrix (unordered)
+        M_raw = self._get_M_for_DI(self.current_DI)
+
+        # ordering
+        if force_reorder or not hasattr(self, "ind_order") or self.ind_order is None:
+            HI = self._get_HI_for_DI(self.current_DI)
+            self.ind_order = np.argsort(HI)
+
+        # apply ordering
+        self.indNames = np.array(self.dPol.indNames)[self.ind_order]
+        self.n = len(self.indNames)
+        self.M = M_raw[self.ind_order][:, self.ind_order]
+
+        # range
+        self.vmin = float(np.nanmin(self.M)) if np.any(np.isfinite(self.M)) else 0.0
+        self.vmax = float(np.nanmax(self.M)) if np.any(np.isfinite(self.M)) else 1.0
+
+    # =================================================
+    # Drawing setup
+    # =================================================
+
+    def _setup_axes(self):
+        self.ax.set_xlim(0, self.n)
+        self.ax.set_ylim(0, self.n)
+        self.ax.set_aspect("equal")
+
+        centers = np.arange(self.n) + 0.5
+        self.ax.set_xticks(centers)
+        self.ax.set_yticks(centers)
+
+        # initial label fontsize (linked to slider)
+        self.label_fontsize = 4
+        self.ax.set_xticklabels(self.indNames, rotation=90, fontsize=self.label_fontsize)
+        self.ax.set_yticklabels(self.indNames, fontsize=self.label_fontsize)
+
+        self.ax.set_title(f"Pairwise distances (DI ≥ {self.current_DI:.2f})", pad=10)
+
+    def _color_for_val(self, val, norm):
+        if not np.isfinite(val):
+            return "black"
+        return self.cmap(norm(val))
+
+    # =================================================
+    # Main bricks: create once, update facecolors later
+    # =================================================
+
+    def _OLDinit_bricks(self):
+        self.ax.patches.clear()
+
+        norm = plt.Normalize(self.vmin, self.vmax)
+        self._norm = norm
+
+        # store patches in a flat list for fast updates
+        self._bricks = []
+
+        # IMPORTANT: preserve your original orientation: val = M[j, i] drawn at (i, j)
+        for i in range(self.n):
+            for j in range(self.n):
+                val = self.M[j, i]
+                rect = Rectangle(
+                    (i, j), 1, 1,
+                    facecolor=self._color_for_val(val, norm),
+                    edgecolor="none"
+                )
+                self.ax.add_patch(rect)
+                self._bricks.append(rect)
+
+        self.fig.canvas.draw_idle()
+
+    def _init_bricks(self):
+        # Remove only previously created bricks (do NOT use self.ax.patches.clear())
+        if hasattr(self, "_bricks"):
+            for r in self._bricks:
+                try:
+                    r.remove()
+                except Exception:
+                    pass
+
+        norm = plt.Normalize(self.vmin, self.vmax)
+        self._norm = norm
+
+        self._bricks = []
+
+        # IMPORTANT: preserve your original orientation: val = M[j, i] drawn at (i, j)
+        for i in range(self.n):
+            for j in range(self.n):
+                val = self.M[j, i]
+                rect = Rectangle(
+                    (i, j), 1, 1,
+                    facecolor=self._color_for_val(val, norm),
+                    edgecolor="none"
+                )
+                self.ax.add_patch(rect)
+                self._bricks.append(rect)
+
+        self.fig.canvas.draw_idle()
+
+    def _update_bricks(self):
+        # update normalisation if needed
+        norm = plt.Normalize(self.vmin, self.vmax)
+        self._norm = norm
+
+        # update all facecolors
+        k = 0
+        for i in range(self.n):
+            for j in range(self.n):
+                val = self.M[j, i]
+                self._bricks[k].set_facecolor(self._color_for_val(val, norm))
+                k += 1
+
+        # update title
+        self.ax.set_title(f"Pairwise distances (DI ≥ {self.current_DI:.2f})", pad=10)
+
+        self.fig.canvas.draw_idle()
+
+    # =================================================
+    # Colour key: bricks, not imshow
+    # =================================================
+
+    def _init_colour_key(self):
+        self.cax.clear()
+
+        # key as a vertical stack of small bricks
+        self._key_bins = 256
+        self._key_rects = []
+
+        # axis coordinates:
+        # x in [0,1], y in [0, key_bins]
+        self.cax.set_xlim(0, 1)
+        self.cax.set_ylim(0, self._key_bins)
+
+        norm = plt.Normalize(self.vmin, self.vmax)
+        for y in range(self._key_bins):
+            # map y to value in [vmin, vmax]
+            frac = y / (self._key_bins - 1)
+            val = self.vmin + frac * (self.vmax - self.vmin)
+            rect = Rectangle(
+                (0, y), 1, 1,
+                facecolor=self.cmap(norm(val)),
+                edgecolor="none"
+            )
+            self.cax.add_patch(rect)
+            self._key_rects.append(rect)
+
+        # ticks + labels
+        self.cax.set_xticks([])
+        self.cax.set_yticks([0, self._key_bins - 1])
+        self.cax.set_yticklabels([f"{self.vmin:.2f}", f"{self.vmax:.2f}"], fontsize=8)
+        self.cax.set_title("Distance", fontsize=9)
+
+        self.fig.canvas.draw_idle()
+
+    def _update_colour_key(self):
+        # recolour bricks according to updated vmin/vmax
+        norm = plt.Normalize(self.vmin, self.vmax)
+        for y in range(self._key_bins):
+            frac = y / (self._key_bins - 1)
+            val = self.vmin + frac * (self.vmax - self.vmin)
+            self._key_rects[y].set_facecolor(self.cmap(norm(val)))
+
+        self.cax.set_yticklabels([f"{self.vmin:.2f}", f"{self.vmax:.2f}"], fontsize=8)
+        self.fig.canvas.draw_idle()
+
+    # =================================================
+    # Widgets
+    # =================================================
+
+    def _init_widgets(self):
+        # DI slider
+        ax_DI = self.fig.add_axes([0.18, 0.10, 0.62, 0.03])
+        self.DI_slider = Slider(ax_DI, "DI", self.di_min, self.di_max, valinit=self.di_min)
+        self.DI_slider.on_changed(self._on_DI_change)
+
+        # reorder button
+        ax_RE = self.fig.add_axes([0.82, 0.10, 0.14, 0.035])
+        self.reorder_button = Button(ax_RE, "Reorder by HI", hovercolor="0.95", color="red")
+        self.reorder_button.on_clicked(self._on_reorder)
+
+        # font slider: beneath colour key (your original style)
+        pos = self.cax.get_position()
+        ax_FS = self.fig.add_axes([pos.x0, 0.04, pos.width, 0.03])
+
+        self.font_slider = Slider(ax_FS, "Labels", 0, 8, valinit=self.label_fontsize, valstep=1)
+        self.font_slider.on_changed(self._on_fontsize_change)
+
+    # =================================================
+    # Callbacks
+    # =================================================
+
+    def _on_DI_change(self, val):
+        # If cached, snap to nearest grid DI
+        if self._inc_pairwise is not None or self._inc_statewise is not None:
+            di_eff = self._nearest_grid_value(val)
+        else:
+            di_eff = float(val)
+
+        # IMPORTANT: keep current ordering during slider motion
+        self._compute_for_DI(di_eff, force_reorder=False)
+
+        # update bricks + key
+        self._update_bricks()
+        self._update_colour_key()
+
+    def _on_reorder(self, event=None):
+        # recompute ordering at current DI, then redraw labels + bricks
+        self._compute_for_DI(self.current_DI, force_reorder=True)
+
+        # update axis tick labels (same ticks, new labels)
+        centers = np.arange(self.n) + 0.5
+        self.ax.set_xticks(centers)
+        self.ax.set_yticks(centers)
+        self.ax.set_xticklabels(self.indNames, rotation=90, fontsize=self.label_fontsize)
+        self.ax.set_yticklabels(self.indNames, fontsize=self.label_fontsize)
+
+        self._update_bricks()
+        self._update_colour_key()
+
+    def _on_fontsize_change(self, val):
+        fs = int(val)
+        self.label_fontsize = fs
+        self.ax.set_xticklabels(self.indNames, rotation=90, fontsize=fs)
+        self.ax.set_yticklabels(self.indNames, fontsize=fs)
+        self.fig.canvas.draw_idle()
+
+    # =================================================
+    # Hover
+    # =================================================
+
+    def _install_format_coord(self):
+        n = self.n
+
+        def format_coord(x, y):
+            fallback = " " * 40
+            i = int(np.floor(x))
+            j = int(np.floor(y))
+            if 0 <= i < n and 0 <= j < n:
+                a = self.indNames[j]
+                b = self.indNames[i]
+                d = self.M[j, i]
+                if np.isfinite(d):
+                    return f"{a} × {b} : {d:.3f}"
+                return f"{a} × {b} : NA"
             return fallback
 
         self.ax.format_coord = format_coord
@@ -2672,7 +5740,7 @@ class DiemPlotPrep:
         ticks: Optional ticks for plotting.
         smooth: Optional smoothing parameter.
     """
-    def __init__(self, plot_theme, ind_ids, chrRefLengths, chrRelativeRecRates,polarised_data, di_threshold, di_column, diemStringPyCol, genome_pixels, ticks=None, smooth=None):
+    def __init__(self, plot_theme, ind_ids, chrRefLengths, polarised_data, di_threshold, di_column, diemStringPyCol, genome_pixels, ticks=None, chrRelativeRecRates=None, smooth=None):
         self.polarised_data = polarised_data
         self.di_threshold = di_threshold
         self.di_column = di_column
@@ -2735,7 +5803,7 @@ class DiemPlotPrep:
             self.MapBC.append(bed_positions / ref_len)
 
         # optional sanity check (can remove later)
-        print("Initialized MapBC for plotting.", self.MapBC[0][:10])
+        #print("Initialized MapBC for plotting.", self.MapBC[0][:10])
 
 
     # format_bed_data reworked by ChatGPT 5.2 for speed, but mostly clarity
@@ -2880,10 +5948,10 @@ class DiemPlotPrep:
 
             effective_scale = scale / rec_rate
 
-            print(
+            """print(
                 f"Smoothing {scaffold}: scale={scale:.3g}, "
                 f"recRate={rec_rate:.3g}, effective={effective_scale:.3g}"
-            )
+            )"""
 
             smoothed = smooth.laplace_smooth_multiple_haplotypes(
                 scaffold_arrays[scaffold],
@@ -3108,17 +6176,16 @@ def flatten_ring_with_offsets(per_chr_ring, length_of_chromosomes):
     Convert per-chromosome ring representation into a single
     global-coordinate ring suitable for IrisPlot / LongPlot.
 
-        per_chr_ring:
-                [
-                    [(w,s,e), ...],   # chromosome 0 (local coords)
-                    [(w,s,e), ...],   # chromosome 1
-                    ...
-                ]
+    per_chr_ring:
+        [
+          [(w,s,e), ...],   # chromosome 0 (local coords)
+          [(w,s,e), ...],   # chromosome 1
+          ...
+        ]
 
-        length_of_chromosomes:
-                dict preserving chromosome order:
-                    chrom -> (start, end, length)
-
+    length_of_chromosomes:
+        dict preserving chromosome order:
+          chrom -> (start, end, length)
     """
     flat = []
     chrom_keys = list(length_of_chromosomes.keys())
@@ -3136,6 +6203,72 @@ def flatten_ring_with_offsets(per_chr_ring, length_of_chromosomes):
 
     return flat
 
+import time
+from typing import Iterable, Callable, Optional
+
+def prefill_slider_cache(
+    *,
+    cache,                  # PlotCache instance
+    namespace: str,
+    basekey,
+    di_values: Iterable[float],
+    compute_fn: Callable[[float], object],  # returns payload to cache
+    tol: Optional[float] = None,            # optional: skip if already cached "nearby"
+    progress: str = "text",                 # "text", "tqdm", or "none"
+    label: str = "Prefill cache",
+):
+    di_values = list(di_values)
+    n = len(di_values)
+    if n == 0:
+        return
+
+    use_tqdm = (progress == "tqdm")
+    pbar = None
+    if use_tqdm:
+        try:
+            from tqdm.auto import tqdm
+            pbar = tqdm(total=n, desc=label)
+        except Exception:
+            use_tqdm = False  # fall back silently
+
+    t0 = time.time()
+    done = 0
+
+    for i, di in enumerate(di_values, start=1):
+        # optional "near" skip
+        if tol is not None:
+            hit = cache.get_nearest_float_key(
+                namespace=namespace,
+                basekey=basekey,
+                x=float(di),
+                tol=float(tol),
+            )
+            if hit is not None:
+                done += 1
+                if use_tqdm:
+                    pbar.update(1)
+                continue
+
+        payload = compute_fn(float(di))
+        cache.set_float_key(
+            namespace=namespace,
+            basekey=basekey,
+            x=float(di),
+            value=payload,
+        )
+        done += 1
+
+        if use_tqdm:
+            pbar.update(1)
+        elif progress == "text":
+            # lightweight text progress every ~5%
+            if i == 1 or i == n or (i % max(1, n // 20) == 0):
+                dt = time.time() - t0
+                print(f"{label}: {i}/{n} ({100*i/n:.0f}%)  elapsed {dt:.1f}s")
+
+    if use_tqdm and pbar is not None:
+        pbar.close()
+
 
 def diemPlotPrepFromBedMeta(plot_theme, bed_file_path, meta_file_path,di_threshold,genome_pixels,ticks, smooth = None):
 
@@ -3145,13 +6278,13 @@ def diemPlotPrepFromBedMeta(plot_theme, bed_file_path, meta_file_path,di_thresho
         plot_theme=plot_theme,
         ind_ids=bmIndIDs,
         chrRefLengths=chrRefLengths,
-        chrRelativeRecRates=chrRelativeRecRates,
         polarised_data=pzbed,
         di_threshold=di_threshold,
         diemStringPyCol=10,
         di_column=13,
         genome_pixels=genome_pixels,
         ticks=ticks,
+        chrRelativeRecRates=chrRelativeRecRates,
         smooth=smooth
     )
     
@@ -4236,8 +7369,3 @@ def diemLongPlot(
 
     ax.format_coord = long_format_coord
     plt.show()
-
-
-
-
-
