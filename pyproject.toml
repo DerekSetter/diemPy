@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diempy"
-version = "0.9.1"
+version = "1.0"
 authors = [
   { name="Derek Setter", email="derek.setter@gmail.com" },
   { name = "Stuart J.E. Baird"}
@@ -21,7 +21,7 @@ dependencies = [
     "scikit-allel>=1.3.0",
     "joblib>=1.5.3",
     "ipympl>=0.10.0",
-    "jupyterlab>=4.5.3"
+    "pysam>=0.23.3"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -32,3 +32,4 @@ license-files = ["LICEN[CS]E*"]
 
 [project.scripts]
 vcf2diem = "diempy.vcf2diembeds:main"
+diem2fasta = "diempy.diem2fasta:main"
