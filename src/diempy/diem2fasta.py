@@ -1465,8 +1465,7 @@ def run_diem2fasta(meta_path: str,
         "regions_fasta": regions_fasta_written,
     }
 
-# -------------------- CLI (optional) --------------------
-if __name__ == "__main__":
+def main():
     if "ipykernel" in sys.modules:
         raise SystemExit("diem2fasta: refusing to run CLI inside ipykernel; call run_diem2fasta(...) instead.")
     import argparse
@@ -1491,3 +1490,6 @@ if __name__ == "__main__":
         out_fasta_path=args.out_fasta,
         regions_bed_path=args.regions2fasta,
     )
+# -------------------- CLI (optional) --------------------
+if __name__ == "__main__":
+    main()
