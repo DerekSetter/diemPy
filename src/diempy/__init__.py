@@ -26,6 +26,7 @@ from . import tests
 from . import utils
 from . import io
 from . import plots
+from . import diem2fasta
 
 # Import key functions for direct access
 # I/O functions
@@ -73,3 +74,7 @@ from .plots import diemMultiPairsPlot
 from .plots import diemPlotPrepFromBedMeta
 from .plots import diemIrisFromPlotPrep
 from .plots import diemLongFromPlotPrep
+
+# diem2fasta
+
+from .diem2fasta import run_diem2fasta

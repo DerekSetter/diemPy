@@ -464,10 +464,17 @@ class DiemType:
             a.PolByChr[idx] = a.PolByChr[idx][myFilter]
             a.DIByChr[idx] = a.DIByChr[idx][myFilter]
             a.MapBC[idx] = a.MapBC[idx][myFilter]
-        print("proportion of each chromosome retained after thresholding:")
-        print(proportionRetained)
+        
+        print("after thresholding...\n")
+        print("the average proportion of sites retained across chromosomes is ",np.mean(proportionRetained))
+        # print the chromosome name and proportion retained for the chromosome with the smallest amount retained
+        minIdx = np.argmin(proportionRetained)
+        print("the chromosome with the smallest proportion of sites retained is ",a.chrNames[minIdx]," with ",proportionRetained[minIdx]," of sites retained")
+        # now print the proprotion retained that is biggest
+        maxIdx = np.argmax(proportionRetained)
+        print("the chromosome with the largest proportion of sites retained is ",a.chrNames[maxIdx]," with ",proportionRetained[maxIdx]," of sites retained")
 
-        print("thresholding done")
+        print("\nthresholding done\n")
         if sort_by_HI == True:
             a.sort()
             print("new hybrid indices computed and individuals have been resorted by HI")
