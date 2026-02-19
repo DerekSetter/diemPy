@@ -2,12 +2,13 @@
 
 """vcf2diembeds.py
 
-Usage
-  vcf_file_path = 'path/to/your/file.vcf'
-  vcf2diembed.py vcf_file_path
+Usage:
+  vcf2diembeds.py <vcf_file_path> [--outdir DIR]
 
-Options:
-  None
+Examples:
+  vcf2diembeds.py path/to/file.vcf
+  vcf2diembeds.py path/to/file.vcf --outdir results/
+
   
 Features:
   vcf files of any size (eg 26Gb filesize, 474 genomes, 3.6 million sites, 37 mins (see increment...now 10 mins?)
@@ -42,6 +43,7 @@ import io, gzip
 import operator
 import itertools  # used by diem_most_common_alleles (downstream tool)
 import re
+import argparse
 
 
 def open_text(path):
@@ -246,12 +248,36 @@ def fastGTs(sample_fields, seqLabelsString, gt_index):
 
 
 def main():
-    file_path = sys.argv[1]
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description="Convert a VCF(.gz) into DIEM bed-like outputs."
+    )
+    parser.add_argument("vcf_file_path", help="Path to input VCF (.vcf or .vcf.gz)")
+    parser.add_argument(
+        "--outdir",
+        "-o",
+        default=None,
+        help="Optional output directory. Defaults to the input file's directory."
+    )
+    args = parser.parse_args()
+
+    file_path = args.vcf_file_path
     start_time = timer()
 
-    variant_output_path = file_path + '.diem_input.bed'
-    exclude_output_path = file_path + '.diem_exclude.bed'
-    meta_output_path    = file_path + '.diem_meta.bed'
+    # Decide output directory
+    if args.outdir is None:
+        outdir = os.path.dirname(os.path.abspath(file_path)) or "."
+    else:
+        outdir = os.path.abspath(args.outdir)
+        os.makedirs(outdir, exist_ok=True)
+
+    # Base name for outputs (keep full name incl .vcf/.vcf.gz, matching your current naming)
+    base = os.path.basename(file_path)
+
+    variant_output_path = os.path.join(outdir, base + ".diem_input.bed")
+    exclude_output_path = os.path.join(outdir, base + ".diem_exclude.bed")
+    meta_output_path    = os.path.join(outdir, base + ".diem_meta.bed")
+
 
     samples = []
     chromosome_tally = Counter()
