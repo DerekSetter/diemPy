@@ -65,8 +65,10 @@ from .plots import GenomeMultiSummaryPlot
 from .plots import GenomicDeFinettiPlot
 from .plots import GenomicMultiDeFinettiPlot
 from .plots import GenomicContributionsPlot
+from .plots import IndGenomicContributionsPlot
 
 from .plots import diemPairsPlot
+from .plots import diemMultiPairsPlot
 
 from .plots import diemPlotPrepFromBedMeta
 from .plots import diemIrisFromPlotPrep

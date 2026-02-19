@@ -2,8 +2,7 @@ from __future__ import annotations
 
 
 # ---- stdlib ----
-import copy
-from collections import defaultdict, Counter
+from collections import defaultdict
 from itertools import groupby, chain
 
 
@@ -17,14 +16,14 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Wedge, Polygon, Rectangle
 import matplotlib.colors as mcolors
 from matplotlib.widgets import Button, Slider
-from matplotlib.colors import to_rgb
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import to_rgb, LinearSegmentedColormap
 
-
+import time
+from dataclasses import dataclass
+from typing import Dict, Tuple, List, Optional
 
 # ---- diem internals ----
 from . import smooth
-from . import contigs as ct
 
 
 # explicitly used smoothing entry point
@@ -36,20 +35,14 @@ from bisect import bisect_left
 from joblib import Parallel, delayed # for parallel computation of 'pwdmatrix' pairwise distance matrix rows
 
 """********************************************************
-Keyword 'DMBCtoucher' is used to label the only four
+Keyword 'DMBCtoucher' is used to label the 
 points where plots.py touches diemtypes.DMBC states
 
 This is for future-proofing against the day 
-where DMBC is allowed to store states other than {0,1,2,3}
+where DMBC is allowed to store states other than {0,1,2,3}->{U,0,1,2} 
 (c.f. vcf2diem output)
 
-The four (future-proofed = X) points are:
-X   PAR_statewise_genomes_summary_given_DI
-X   SER_statewise_genomes_summary_given_DI
-    pwmatrixFromDiemType
-
-
-plots.py _currently_ has access to extra vcf2diem states through
+plots.py _currently_ has potential access to extra vcf2diem states through
     read_diem_bed_4_plots
     -> diemIrisFromPlotPrep
     -> diemLongFromPlotPrep
@@ -310,8 +303,12 @@ def Chr_Nickname(chr_name):
     Returns:
         str: Shortened chromosome name.
     """
-    if 'scaffold' in chr_name:
+    if 'scaffold_' in chr_name:
+        return chr_name.replace('scaffold_', 'Scaf ')[-10:]
+    elif 'scaffold' in chr_name:
         return chr_name.replace('scaffold', 'Scaf ')[-10:]
+    elif 'chromosome_' in chr_name:
+        return chr_name.replace('chromosome_', 'Chr ')[-9:]
     elif 'chromosome' in chr_name:
         return chr_name.replace('chromosome', 'Chr ')[-9:]
     else:
@@ -326,10 +323,12 @@ def Ind_Nickname(ind_name):
     Returns:
         str: Shortened individual name.
     """
+    shortlength = 11
+
     if '_NA' in ind_name:
-        return ind_name.replace('_NA', ' NA')[-10:]
+        return ind_name.replace('_NA', '')[-shortlength:]
     else:
-        return ind_name[-10:]
+        return ind_name[-shortlength:]
     
 
 def read_diem_bed_4_plots(bed_file_path, meta_file_path):
@@ -440,6 +439,8 @@ def _statewise_summary_one_chr(SM, DI, ploidies, DIthreshold):
     """
     Compute statewise summary for ONE chromosome.
     Returns (counts_dict, (RetainedNumer, RetainedDenom))
+
+    DMBCtoucher
 
     This is a helper for PAR_statewise_genomes_summary_given_DI.
     """
@@ -641,11 +642,11 @@ def summaries_from_statewise_counts(chrom_counts):
     hapDenom   = 2 * dipDenom
     stateDenom = dipDenom + A0
 
-    HI   = (A2 + 2 * A3) / hapDenom
-    HOM1 = A1 / dipDenom
-    HET  = A2 / dipDenom
-    HOM2 = A3 / dipDenom
-    U    = A0 / stateDenom
+    HI = np.divide((A2 + 2*A3), hapDenom, out=np.zeros_like(A2, dtype=float), where=(hapDenom != 0))
+    HOM1 = np.divide(A1, dipDenom, out=np.zeros_like(A1, dtype=float), where=(dipDenom != 0))
+    HET  = np.divide(A2, dipDenom, out=np.zeros_like(A2, dtype=float), where=(dipDenom != 0))
+    HOM2 = np.divide(A3, dipDenom, out=np.zeros_like(A3, dtype=float), where=(dipDenom != 0))
+    U    = np.divide(A0, stateDenom, out=np.zeros_like(A0, dtype=float), where=(stateDenom != 0))
 
     return [HI, HOM1, HET, HOM2, U]
 
@@ -730,12 +731,9 @@ diemColours = [
 
 
 """________________________________________ cache-ing helpers ___________________"""
-import numpy as np
-import time
-from dataclasses import dataclass
-from typing import Dict, Tuple, List, Optional
 
-# Types matching your existing API
+
+# Types matching existing API
 ChromCounts = List[dict]                 # length nChr, dict with counts0..counts3 arrays (nInds,)
 ChromRetained = List[Tuple[int, int]]    # length nChr, (kept, total)
 
@@ -890,13 +888,6 @@ class StatewiseDIIncrementalCache:
         return self._snapshots[key]
 
 
-
-import numpy as np
-import time
-from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
-
-
 @dataclass
 class _ChrPWState:
     order_asc: np.ndarray   # indices sorting DI ascending
@@ -953,6 +944,8 @@ class PairwiseDIIncrementalCache:
         # Global incremental accumulators across ALL chosen chromosomes
         self._num = np.zeros((self.n_ind, self.n_ind), dtype=np.float64)
         self._den = np.zeros((self.n_ind, self.n_ind), dtype=np.int64)
+        self._diag_num = np.zeros(self.n_ind, dtype=np.float64)
+        self._diag_den = np.zeros(self.n_ind, dtype=np.int64)
 
     def _init_chr_states(self):
         states = []
@@ -962,7 +955,10 @@ class PairwiseDIIncrementalCache:
             di_sorted = DI[order]
 
             # Clamp states: >2 -> 3 (future-proofing) ; keep 0 as missing
-            SM = np.minimum(self.aDT.DMBC[chr_idx], 3).astype(np.int8)
+            #SM = np.minimum(self.aDT.DMBC[chr_idx], 3).astype(np.int8)
+            # the clamp is wrong. Fix it: we want 0 to stay 0, and everything else >2 to become 3
+            SM0 = self.aDT.DMBC[chr_idx]
+            SM = np.where((SM0 >= 0) & (SM0 <= 3), SM0, 0).astype(np.int8)
 
             states.append(_ChrPWState(
                 order_asc=order,
@@ -973,39 +969,37 @@ class PairwiseDIIncrementalCache:
         return states
 
     def _add_site_block(self, SM, idxs):
-        """
-        Incrementally add a block of sites (columns) into global num/den.
-        SM: (n_ind, n_sites_chr)
-        idxs: 1D array of column indices (site indices) to add
-        """
         W = self.W
-        n_ind = self.n_ind
 
-        # iterate sites in the block
         for s in idxs:
-            col = SM[:, s]                 # (n_ind,)
-            valid = col != 0
+            col = SM[:, s]          # (n_ind,)
+            valid = (col != 0)
             idx = np.nonzero(valid)[0]
             m = idx.size
+            if m == 0:
+                continue
+
+            vals = col[idx].astype(np.int64)
+
+            # ---- diagonal accumulators (within-individual) ----
+            # valid site contributes to denominator
+            self._diag_den[idx] += 1
+            # HET contributes 1 unit (later /2 -> 0.5)
+            self._diag_num[idx] += (vals == 2)
+
+            # ---- off-diagonal accumulators ----
             if m < 2:
                 continue
 
-            vals = col[idx].astype(np.int64)  # 1..3
-
-            # weights for all pairs in this site (m x m)
             ww = W[vals[:, None], vals[None, :]].astype(np.float64)
 
-            # denom contribution: 1 for all off-diagonal pairs among valid indices
             ones = np.ones((m, m), dtype=np.int64)
             np.fill_diagonal(ones, 0)
 
-            # write into global matrices
             ix = np.ix_(idx, idx)
             self._num[ix] += ww
             self._den[ix] += ones
 
-            # IMPORTANT: keep diagonal denom at 0 (avoid biological invalidity)
-            # (fill_diagonal already handled per-site)
 
     def prefill(self):
         t0 = time.time()
@@ -1026,10 +1020,18 @@ class PairwiseDIIncrementalCache:
 
             # Snapshot matrix for this threshold
             M = np.full((self.n_ind, self.n_ind), np.nan, dtype=np.float64)
+
             mask = self._den > 0
-            M[mask] = self._num[mask] / self._den[mask]
-            # do NOT force diagonal to 0; leave as nan unless data supported
+            M[mask] = self._num[mask] / (2.0 * self._den[mask])
+
+            # fill diagonal with within-individual heterozygosity-like distance
+            dmask = self._diag_den > 0
+            diag = np.full(self.n_ind, np.nan, dtype=np.float64)
+            diag[dmask] = self._diag_num[dmask] / (2.0 * self._diag_den[dmask])
+            np.fill_diagonal(M, diag)
+
             self._snapshots[float(thr)] = M.astype(self.snapshot_dtype, copy=False)
+
 
             if self.progress == "text":
                 elapsed = time.time() - t0
@@ -1050,7 +1052,8 @@ class PairwiseDIIncrementalCache:
 
 """________________________________________ START GenomeSummariesPlot ___________________"""
 
-class OLDGenomeSummaryPlot:
+
+class GenomeSummaryPlot:
     """
     Plots genome summaries with DI filtering and interactive widgets.
 
@@ -1060,467 +1063,7 @@ class OLDGenomeSummaryPlot:
     
     Args:
         dPol: DiemType object containing genomic data.
-    """
-    def __init__(self, dPol):
-        self.dPol = dPol
-
-        # ---- initial state ----
-        self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]
-        self.indNameFont = 6
-        self.indHIorder = np.arange(len(dPol.indNames))
-
-        # initial summaries
-        self.chrom_counts, self.chrom_retained = \
-            statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
-
-        self.summaries = summaries_from_statewise_counts(self.chrom_counts)
-
-        self.DInumer = sum(n for n, _ in self.chrom_retained)
-        self.DIdenom = sum(d for _, d in self.chrom_retained)
-        # END of statewise insert
-        self.prop = self.DInumer / self.DIdenom
-        
-        # ---- figure & axes ----
-        self.fig, self.ax = plt.subplots(figsize=(11, 4))
-
-        colours = Flatten(
-            [['red'], diemColours[1:], ['gray']]
-        )
-
-        self.lines = []
-        for summary, colour in zip(self.summaries, colours):
-            line, = self.ax.plot(summary, color=colour, marker='.')
-            self.lines.append(line)
-
-        self.ax.legend(['HI', 'HOM1', 'HET', 'HOM2', 'U'])
-        self.ax.set_ylim(0, 1)
-        self.ax.set_title('Genomes summaries; no DI filter')
-        self.ax.tick_params(axis='x', rotation=55)
-
-        self._update_xticks()
-
-        # ---- widgets ----
-        self._init_widgets()
-        
-        # ---- coordinate display ----
-        self._install_format_coord()
-
-        plt.show()
-
-    # ---------------- helpers ----------------
-
-    def _update_xticks(self):
-        self.ax.set_xticks(
-            np.arange(len(self.IndNickNames)),
-            np.array(self.IndNickNames)[self.indHIorder],
-            rotation=55,
-            fontsize=self.indNameFont,
-            horizontalalignment='right'
-        )
-    def _install_format_coord(self):
-        n = len(self.dPol.indNames)
-        tolerance = 0.03  # vertical proximity in y-units
     
-        def format_coord(x, y):
-            # Quiet fallback (keeps ipympl stable)
-            fallback = "\u2007" * 30
-    
-            # Nearest x index
-            i = int(round(x))
-            if i < 0 or i >= n:
-                return fallback
-    
-            # Check all summary lines for proximity
-            for summary in self.summaries:
-                y0 = summary[self.indHIorder][i]
-                if abs(y - y0) < tolerance:
-                    return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
-    
-            return fallback
-    
-        self.ax.format_coord = format_coord
-    
-    # ---------------- widgets ----------------
-
-    def _init_widgets(self):
-        DI_span = get_DI_span(self.dPol)
-
-        self.fig.subplots_adjust(bottom=0.3)
-
-        # DI slider
-        DI_box = self.fig.add_axes([0.2, 0.1, 0.65, 0.03])
-        self.DI_slider = Slider(
-            ax=DI_box,
-            label='DI',
-            valmin=DI_span[0],
-            valmax=DI_span[1],
-            valinit=DI_span[0],
-        )
-        self.DI_slider.on_changed(self.DIupdate)
-
-        # Font slider
-        FONT_box = self.fig.add_axes([0.25, 0.025, 0.1, 0.04])
-        self.FONT_slider = Slider(
-            ax=FONT_box,
-            label='IndLabels font',
-            valmin=1,
-            valmax=16,
-            valinit=self.indNameFont,
-        )
-        self.FONT_slider.on_changed(self.FONTupdate)
-
-        # Reorder button
-        reorderBox = self.fig.add_axes([0.8, 0.025, 0.1, 0.04])
-        self.reo_button = Button(
-            reorderBox,
-            'Reorder by HI',
-            hovercolor='0.975',
-            color='red'
-        )
-        self.reo_button.on_clicked(self.reorder)
-
-    # ---------------- callbacks ----------------
-
-    def DIupdate(self, val):
-        self.chrom_counts, self.chrom_retained = \
-            statewise_genomes_summary_given_DI(self.dPol, val)
-
-        self.summaries = summaries_from_statewise_counts(self.chrom_counts)
-
-        self.DInumer = sum(n for n, _ in self.chrom_retained)
-        self.DIdenom = sum(d for _, d in self.chrom_retained)
-        # END of statewise insert
-        self.prop = self.DInumer / self.DIdenom
-
-        self.ax.set_title(
-            "Genomes summaries DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
-            .format(val, self.DInumer, 100 * self.prop)
-        )
-
-        for line, summary in zip(self.lines, self.summaries):
-            line.set_ydata(summary[self.indHIorder])
-
-        self.fig.canvas.draw_idle()
-
-    def reorder(self, event):
-        self.indHIorder = np.argsort(self.summaries[0])  # HI
-
-        self._update_xticks()
-
-        for line, summary in zip(self.lines, self.summaries):
-            line.set_ydata(summary[self.indHIorder])
-
-        self.fig.canvas.draw_idle()
-
-    def FONTupdate(self, val):
-        self.indNameFont = val
-        self._update_xticks()
-        self.fig.canvas.draw_idle()
-
-class OLDISHGenomeSummaryPlot:
-    """
-    Plots genome summaries with DI filtering and interactive widgets.
-
-    Drop-in extension:
-      - optional cache prefill over a DI grid (text progress)
-      - DI slider uses cached results (nearest match within tol)
-    """
-    def __init__(
-        self,
-        dPol,
-        *,
-        prefill_cache=False,      # NEW: set True to precompute cache
-        prefill_step=None,        # NEW: DI step for prefill grid (defaults to slider span / 200)
-        cache_tol=None,           # NEW: tolerance for nearest-cache lookup (defaults to prefill_step/2)
-        progress="text",          # NEW: "text" | "none"
-    ):
-        self.dPol = dPol
-
-        # ---- initial state ----
-        self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]
-        self.indNameFont = 6
-        self.indHIorder = np.arange(len(dPol.indNames))
-
-        # ---- cache (per instance) ----
-        # cache maps DI_value(float) -> (summaries, chrom_retained)
-        self._cache = {}
-        self._cache_keys_sorted = []  # keep a sorted list of DI keys for nearest lookup
-
-        def _cache_set(di, value):
-            di = float(di)
-            if di not in self._cache:
-                self._cache_keys_sorted.append(di)
-                self._cache_keys_sorted.sort()
-            self._cache[di] = value
-
-        def _cache_get_nearest(di, tol):
-            """Return cached payload for nearest DI within tol, else None."""
-            if not self._cache_keys_sorted:
-                return None
-            di = float(di)
-
-            # binary search
-            import bisect
-            keys = self._cache_keys_sorted
-            j = bisect.bisect_left(keys, di)
-            candidates = []
-            if 0 <= j < len(keys):
-                candidates.append(keys[j])
-            if 0 <= j - 1 < len(keys):
-                candidates.append(keys[j - 1])
-
-            best = None
-            best_dist = None
-            for k in candidates:
-                dist = abs(k - di)
-                if best_dist is None or dist < best_dist:
-                    best = k
-                    best_dist = dist
-
-            if best is None or best_dist is None or best_dist > tol:
-                return None
-            return self._cache[best]
-
-        self._cache_set = _cache_set
-        self._cache_get_nearest = _cache_get_nearest
-
-        # ---- initial summaries (no filter) ----
-        self.chrom_counts, self.chrom_retained = statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
-        self.summaries = summaries_from_statewise_counts(self.chrom_counts)
-
-        self.DInumer = sum(n for n, _ in self.chrom_retained)
-        self.DIdenom = sum(d for _, d in self.chrom_retained)
-        self.prop = self.DInumer / self.DIdenom if self.DIdenom else 0.0
-
-        # ---- figure & axes ----
-        self.fig, self.ax = plt.subplots(figsize=(11, 4))
-
-        colours = Flatten([['red'], diemColours[1:], ['gray']])
-
-        self.lines = []
-        for summary, colour in zip(self.summaries, colours):
-            line, = self.ax.plot(summary, color=colour, marker='.')
-            self.lines.append(line)
-
-        self.ax.legend(['HI', 'HOM1', 'HET', 'HOM2', 'U'])
-        self.ax.set_ylim(0, 1)
-        self.ax.set_title('Genomes summaries; no DI filter')
-        self.ax.tick_params(axis='x', rotation=55)
-
-        self._update_xticks()
-
-        # ---- widgets ----
-        self._init_widgets()
-
-        # ---- OPTIONAL: prefill cache grid (text progress) ----
-        if prefill_cache:
-            DI_span = get_DI_span(self.dPol)
-
-            # DEBUG endpoint test
-            lo, hi = DI_span
-            for test in [lo, hi]:
-                cc, cr = statewise_genomes_summary_given_DI(self.dPol, test)
-                kept = sum(n for n, _ in cr)
-                total = sum(d for _, d in cr)
-                print(f"DEBUG endpoint test DI={test}: kept={kept} total={total} frac={(kept/total if total else None)}")
-
-
-            di_min, di_max = float(DI_span[0]), float(DI_span[1])
-
-            if prefill_step is None:
-                # sensible default: ~200 steps across the span
-                span = di_max - di_min
-                prefill_step = span / 200.0 if span > 0 else 1.0
-
-            if cache_tol is None:
-                cache_tol = float(prefill_step) / 2.0
-
-            # Build DI grid including endpoints
-            n_steps = int(np.floor((di_max - di_min) / prefill_step)) if di_max > di_min else 0
-            di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
-            if not di_values or di_values[-1] < di_max:
-                di_values.append(di_max)
-
-            def compute_payload(di):
-                chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, di)
-                summaries = summaries_from_statewise_counts(chrom_counts)
-                return (summaries, chrom_retained)
-
-            # ---- plug into your helper ----
-            # We adapt it by passing a tiny wrapper "cache" object.
-            class _TinyCache:
-                def __init__(self, outer):
-                    self.outer = outer
-
-                def set_float_key(self, *, namespace, basekey, x, value):
-                    self.outer._cache_set(x, value)
-
-                def get_nearest_float_key(self, *, namespace, basekey, x, tol):
-                    # return value, not key, to match our usage below
-                    return self.outer._cache_get_nearest(x, tol)
-
-            tiny = _TinyCache(self)
-
-            # basekey/namespace unused by TinyCache but kept for API compatibility
-            prefill_slider_cache(
-                cache=tiny,
-                namespace="GenomeSummaryPlot",
-                basekey=id(self.dPol),
-                di_values=di_values,
-                compute_fn=compute_payload,
-                tol=None,                 # let it fill all grid points
-                progress=progress,        # "text" requested
-                label="GenomeSummary cache prefill",
-            )
-
-            # Store tol for DIupdate lookup
-            self._cache_tol = float(cache_tol)
-        else:
-            # No prefill: still allow opportunistic caching on demand
-            self._cache_tol = 0.0
-
-        # ---- coordinate display ----
-        self._install_format_coord()
-
-        plt.show()
-
-    # ---------------- helpers ----------------
-
-    def _update_xticks(self):
-        self.ax.set_xticks(
-            np.arange(len(self.IndNickNames)),
-            np.array(self.IndNickNames)[self.indHIorder],
-            rotation=55,
-            fontsize=self.indNameFont,
-            horizontalalignment='right'
-        )
-
-    def _install_format_coord(self):
-        n = len(self.dPol.indNames)
-        tolerance = 0.03  # vertical proximity in y-units
-
-        def format_coord(x, y):
-            fallback = "\u2007" * 30  # stable in ipympl
-
-            i = int(round(x))
-            if i < 0 or i >= n:
-                return fallback
-
-            for summary in self.summaries:
-                y0 = summary[self.indHIorder][i]
-                if abs(y - y0) < tolerance:
-                    return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
-
-            return fallback
-
-        self.ax.format_coord = format_coord
-
-    # ---------------- widgets ----------------
-
-    def _init_widgets(self):
-        DI_span = get_DI_span(self.dPol)
-
-        print("DEBUG DI_span:")
-        print("  DI_span:", DI_span)
-
-        # If you have access to the raw DI vector somewhere, also print actual min/max
-        try:
-            di = np.asarray(self.dPol.DI, dtype=float)  # adjust attribute name if needed
-            di = di[np.isfinite(di)]
-            print("  dPol.DI finite min/max:", float(np.min(di)), float(np.max(di)))
-            print("  dPol.DI finite count:", di.size)
-        except Exception as e:
-            print("  (could not read dPol.DI):", repr(e))
-        # END print("DEBUG DI_span:")
-
-        self.fig.subplots_adjust(bottom=0.3)
-
-        # DI slider
-        DI_box = self.fig.add_axes([0.2, 0.1, 0.65, 0.03])
-        self.DI_slider = Slider(
-            ax=DI_box,
-            label='DI',
-            valmin=DI_span[0],
-            valmax=DI_span[1],
-            valinit=DI_span[0],
-        )
-        self.DI_slider.on_changed(self.DIupdate)
-
-        # Font slider
-        FONT_box = self.fig.add_axes([0.25, 0.025, 0.1, 0.04])
-        self.FONT_slider = Slider(
-            ax=FONT_box,
-            label='IndLabels font',
-            valmin=1,
-            valmax=16,
-            valinit=self.indNameFont,
-        )
-        self.FONT_slider.on_changed(self.FONTupdate)
-
-        # Reorder button
-        reorderBox = self.fig.add_axes([0.8, 0.025, 0.1, 0.04])
-        self.reo_button = Button(
-            reorderBox,
-            'Reorder by HI',
-            hovercolor='0.975',
-            color='red'
-        )
-        self.reo_button.on_clicked(self.reorder)
-
-    # ---------------- callbacks ----------------
-
-    def DIupdate(self, val):
-        # ---- cache lookup first ----
-        payload = None
-        if self._cache_tol > 0:
-            payload = self._cache_get_nearest(val, self._cache_tol)
-
-        if payload is None:
-            # compute + store (lazy fill)
-            self.chrom_counts, self.chrom_retained = statewise_genomes_summary_given_DI(self.dPol, val)
-            self.summaries = summaries_from_statewise_counts(self.chrom_counts)
-            self._cache_set(val, (self.summaries, self.chrom_retained))
-        else:
-            self.summaries, self.chrom_retained = payload
-
-        self.DInumer = sum(n for n, _ in self.chrom_retained)
-        self.DIdenom = sum(d for _, d in self.chrom_retained)
-        self.prop = self.DInumer / self.DIdenom if self.DIdenom else 0.0
-
-        self.ax.set_title(
-            "Genomes summaries DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
-            .format(val, self.DInumer, 100 * self.prop)
-        )
-
-        for line, summary in zip(self.lines, self.summaries):
-            line.set_ydata(summary[self.indHIorder])
-
-        self.fig.canvas.draw_idle()
-
-    def reorder(self, event):
-        self.indHIorder = np.argsort(self.summaries[0])  # HI
-        self._update_xticks()
-
-        for line, summary in zip(self.lines, self.summaries):
-            line.set_ydata(summary[self.indHIorder])
-
-        self.fig.canvas.draw_idle()
-
-    def FONTupdate(self, val):
-        self.indNameFont = val
-        self._update_xticks()
-        self.fig.canvas.draw_idle()
-
-
-import numpy as np
-import bisect
-from matplotlib.widgets import Button, Slider
-import matplotlib.pyplot as plt
-
-class GenomeSummaryPlot:
-    """
-    Plots genome summaries with DI filtering and interactive widgets.
-
     Drop-in extension:
       - optional cache prefill over a DI grid (text progress)
       - DI slider uses cached results (nearest match within tol)
@@ -1778,337 +1321,13 @@ class GenomeSummaryPlot:
 #________________________________________ START GenomeMultiSummaryPlot ___________________
 
 
-class OLDGenomeMultiSummaryPlot:
+
+class GenomeMultiSummaryPlot:
     """
     Plots genome summaries per chromosome with DI filtering and interactive widgets.
     These summaries include HI, HOM1, HET, HOM2, and U proportions per individual.
     Cursor hover displays individual IDs.
     Reorder button sorts individuals by global HI given current DI filter.
-    Args:
-        dPol: DiemType object containing genomic data.
-        chrom_indices: List of chromosome indices to plot.
-    """
-    def __init__(self, dPol, chrom_indices, max_cols=3):
-        self.dPol = dPol
-        self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]  
-        self.max_cols = max_cols
-
-        # ---- validate chromosomes ----
-        self.chrom_indices = self._validate_chrom_indices(chrom_indices)
-
-        # ---- ordering state ----
-        self.indNameFont = 6
-
-        self.chrom_counts, self.chrom_retained = \
-            statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
-        # build per-chromosome summaries once (initial DI)
-        self.chrom_summaries = {}
-        for idx in self.chrom_indices:
-            self.chrom_summaries[idx] = summaries_from_statewise_counts(
-                [self.chrom_counts[idx]]
-    )
-        
-        # authoritative whole-genome summaries (from statewise counts)
-        global_summaries = summaries_from_statewise_counts(self.chrom_counts)
-        self.global_HI = global_summaries[0]
-        global_hi_colour = "cyan"
-        self.indHIorder = np.argsort(self.global_HI)
-        # END statewise insert
-
-
-        # ---- grid layout ----
-        n_plots = len(self.chrom_indices)
-        n_cols = min(self.max_cols, n_plots)
-        n_rows = (n_plots + n_cols - 1) // n_cols
-
-        fig_w = 4.5 * n_cols
-        fig_h = 3.5 * n_rows
-
-        self.fig, self.axes = plt.subplots(
-            n_rows, n_cols,
-            figsize=(fig_w, fig_h),
-            squeeze=False,
-            sharey=True
-        )
-
-    
-        self.fig.subplots_adjust(
-            left=0.06,
-            right=0.98,
-            top=0.92,
-            bottom=0.45,# <-- important: room for sliders.
-            hspace=0.60,   # ← increase this for vert gap between
-            wspace=0.25
-        )
-
-        # ---- draw plots ----
-        self.lines = {}
-        axes_flat = self.axes.flatten()
-
-        colours = Flatten(
-            [['red'], diemColours[1:], ['gray']]
-        )
-
-        self.chrom_axes = {}
-        self.global_hi_lines = {}
-
-        for ax, chrom_idx in zip(axes_flat, self.chrom_indices):
-            self.chrom_axes[chrom_idx] = ax
-            summaries = self.chrom_summaries[chrom_idx]
-
-            chrom_lines = []
-            for summary, colour in zip(summaries, colours):
-                line, = ax.plot(
-                    summary[self.indHIorder],
-                    color=colour,
-                    marker='.',
-                    linewidth=0.8
-                )
-                chrom_lines.append(line)
-
-            self.lines[chrom_idx] = chrom_lines
-
-            # add global HI reference (purple)
-            global_hi_line, = ax.plot(
-                self.global_HI[self.indHIorder],
-                color=global_hi_colour,
-                linestyle="-",
-                linewidth=1.5,
-                alpha=0.8,
-            )
-
-            self.global_hi_lines[chrom_idx] = global_hi_line
-
-
-            ax.set_ylim(0, 1)
-            num, denom = self.chrom_retained[chrom_idx]
-            ax.set_title(
-                f"Chr {chrom_idx} | {num:,}/{denom:,} sites",
-                fontsize=10
-            )
-            ax.tick_params(axis='x', rotation=55)
-
-            ax.set_xticks(
-                np.arange(len(self.IndNickNames)),
-                np.array(self.IndNickNames)[self.indHIorder],
-                fontsize=self.indNameFont,
-                ha='right'
-            )
-
-        # hide unused axes
-        for ax in axes_flat[len(self.chrom_indices):]:
-            ax.axis("off")
-
-        # legend once
-        axes_flat[0].legend(
-            ['HIc', 'HOM1', 'HET', 'HOM2', 'U', 'HIg'],
-            fontsize=8,
-            frameon=False
-        )
-
-        # ---- widgets ----
-        self._init_widgets()
-
-        # ---- coordinate display ----
-        self._install_format_coord()
-
-        plt.show()
-
-    # ==================================================
-    # Validation
-    # ==================================================
-
-    def _validate_chrom_indices(self, chrom_indices):
-        max_idx = len(self.dPol.chrLengths) - 1
-        valid, rejected = [], []
-
-        for idx in chrom_indices:
-            if isinstance(idx, (int, np.integer)) and 0 <= idx <= max_idx:
-                valid.append(int(idx))
-            else:
-                rejected.append(idx)
-
-        if rejected:
-            print(
-                "GenomeMultiSummaryPlot: rejected chromosome indices:",
-                rejected
-            )
-
-        if not valid:
-            raise ValueError(
-                "GenomeMultiSummaryPlot: no valid chromosome indices."
-            )
-
-        return valid
-
-    
-
-    # ==================================================
-    # Helper
-    # ==================================================
-
-    def _install_format_coord(self):
-        """
-        Install per-axis coordinate display showing IndID when
-        cursor is close to a plotted point.
-        """
-
-        n = len(self.dPol.indNames)
-        tolerance = 0.03  # vertical proximity in y-units
-
-        axes_flat = self.axes.flatten()[:len(self.chrom_indices)]
-
-        for ax, chrom_idx in zip(axes_flat, self.chrom_indices):
-            chrom_lines = self.lines[chrom_idx]
-
-            def make_format_coord(ax, chrom_lines):
-                def format_coord(x, y):
-                    fallback = "\u2007" * 30
-
-                    i = int(round(x))
-                    if i < 0 or i >= n:
-                        return fallback
-
-                    for line in chrom_lines:
-                        ydata = line.get_ydata()
-                        if abs(y - ydata[i]) < tolerance:
-                            return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
-
-                    return fallback
-
-                return format_coord
-
-            ax.format_coord = make_format_coord(ax, chrom_lines)
-
-    # ==================================================
-    # Widgets
-    # ==================================================
-
-    def _init_widgets(self):
-        DI_span = get_DI_span(self.dPol)
-
-        # DI slider
-        ax_DI = self.fig.add_axes([0.15, 0.18, 0.7, 0.03])
-        self.DI_slider = Slider(
-            ax_DI, "DI",
-            DI_span[0], DI_span[1],
-            valinit=DI_span[0]
-        )
-        self.DI_slider.on_changed(self._on_DI_change)
-
-        # font slider
-        ax_FS = self.fig.add_axes([0.25, 0.12, 0.1, 0.03])
-        self.FONT_slider = Slider(
-            ax_FS,
-            "IndLabel font",
-            4, 16,
-            valinit=self.indNameFont,
-            valstep=1
-        )
-        self.FONT_slider.on_changed(self._on_font_change)
-
-        # reorder button
-        ax_RE = self.fig.add_axes([0.75, 0.115, 0.15, 0.045])
-        self.reorder_button = Button(
-            ax_RE,
-            "Reorder by global HI",
-            hovercolor="0.95",
-            color="cyan" # should be same as global HI line color
-        )
-        self.reorder_button.on_clicked(self._on_reorder)
-
-    # ==================================================
-    # Callbacks
-    # ==================================================
-
-    def _on_DI_change(self, val):
-        # recompute statewise counts
-        self.chrom_counts, self.chrom_retained = \
-            statewise_genomes_summary_given_DI(self.dPol, val)
-
-        # recompute per-chromosome summaries (cheap)
-        for idx in self.chrom_indices:
-            summaries = summaries_from_statewise_counts(
-                [self.chrom_counts[idx]]
-            )
-            self.chrom_summaries[idx] = summaries
-            # recompute global HI from statewise counts
-            global_summaries = summaries_from_statewise_counts(self.chrom_counts)
-            self.global_HI = global_summaries[0]
-
-            # update plotted data
-            for line, summary in zip(self.lines[idx], summaries):
-                line.set_ydata(summary[self.indHIorder])
-
-            # update global HI overlay
-            self.global_hi_lines[idx].set_ydata(
-                self.global_HI[self.indHIorder]
-            )
-
-            # update title with retained counts
-            num, denom = self.chrom_retained[idx]
-            self.chrom_axes[idx].set_title(
-                f"Chr {idx} | {num:,}/{denom:,} sites",
-                fontsize=10
-            )
-
-        self.fig.canvas.draw_idle()
-
-
-    def _on_font_change(self, val):
-        self.indNameFont = int(val)
-        labels = np.array(self.dPol.indNames)[self.indHIorder]
-
-        for ax in self.axes.flatten()[:len(self.chrom_indices)]:
-            ax.set_xticklabels(labels, fontsize=self.indNameFont)
-
-        self.fig.canvas.draw_idle()
-
-    def _on_reorder(self, event=None):
-        """
-        Reorder individuals by whole-genome HI
-        at the CURRENT DI threshold.
-        """
-    
-        summaries, _, _ = genomes_summary_given_DI(
-            self.dPol, self.DI_slider.val
-        )
-    
-        global_HI = summaries[0]
-        self.indHIorder = np.argsort(global_HI)
-
-        # update global HI ordering
-        for idx in self.chrom_indices:
-            self.global_hi_lines[idx].set_ydata(
-                self.global_HI[self.indHIorder]
-            )
-    
-        labels = np.array(self.dPol.indNames)[self.indHIorder]
-    
-        for idx in self.chrom_indices:
-            summaries = self.chrom_summaries[idx]
-            for line, summary in zip(self.lines[idx], summaries):
-                line.set_ydata(summary[self.indHIorder])
-    
-        for ax in self.axes.flatten()[:len(self.chrom_indices)]:
-            ax.set_xticks(
-                np.arange(len(labels)),
-                labels,
-                fontsize=self.indNameFont,
-                ha="right"
-            )
-    
-        self.fig.canvas.draw_idle()
-
-
-import numpy as np
-import bisect
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Button, Slider
-
-class GenomeMultiSummaryPlot:
-    """
-    Plots genome summaries per chromosome with DI filtering and interactive widgets.
 
     Drop-in extension:
       - optional incremental cache prefill using StatewiseDIIncrementalCache
@@ -2138,6 +1357,7 @@ class GenomeMultiSummaryPlot:
     ):
         self.dPol = dPol
         self.IndNickNames = [Ind_Nickname(name) for name in dPol.indNames]
+        self.ChrNickNames = [Chr_Nickname(name) for name in dPol.chrNames]
         self.max_cols = max_cols
 
         # ---- validate chromosomes ----
@@ -2263,7 +1483,7 @@ class GenomeMultiSummaryPlot:
 
             ax.set_ylim(0, 1)
             num, denom = self.chrom_retained[chrom_idx]
-            ax.set_title(f"Chr {chrom_idx} | {num:,}/{denom:,} sites", fontsize=10)
+            ax.set_title(f"{self.ChrNickNames[chrom_idx]} | {num:,}/{denom:,} sites", fontsize=10)
             ax.tick_params(axis='x', rotation=55)
 
             ax.set_xticks(
@@ -2286,6 +1506,9 @@ class GenomeMultiSummaryPlot:
 
         # ---- widgets ----
         self._init_widgets()
+        # Force an initial DI computation at the *max* endpoint (or whatever value you want) EURG!
+        #DI_span = get_DI_span(self.dPol)
+        #self._on_DI_change(float(DI_span[1]))
 
         # ---- OPTIONAL: incremental cache prefill ----
         if prefill_cache:
@@ -2302,13 +1525,13 @@ class GenomeMultiSummaryPlot:
             # Build DI grid including endpoints
             if di_max > di_min:
                 n_steps = int(np.floor((di_max - di_min) / prefill_step))
-                di_values = [di_min + k * prefill_step for k in range(n_steps + 1)]
-                if not di_values or di_values[-1] < di_max:
-                    di_values.append(di_max)
+                di_grid = di_min + prefill_step * np.arange(n_steps + 1, dtype=float)
+                di_grid = np.clip(di_grid, di_min, di_max)
+                di_grid[-1] = di_max
             else:
-                di_values = [di_min]
+                di_grid = np.array([di_min], dtype=float)
 
-            di_grid = np.asarray(di_values, dtype=float)
+            #di_grid = np.asarray(di_values, dtype=float)
 
             inc = StatewiseDIIncrementalCache(
                 self.dPol,
@@ -2450,7 +1673,7 @@ class GenomeMultiSummaryPlot:
 
             num, denom = self.chrom_retained[idx]
             self.chrom_axes[idx].set_title(
-                f"Chr {idx} | {num:,}/{denom:,} sites",
+                f"{self.ChrNickNames[idx]} | {num:,}/{denom:,} sites",
                 fontsize=10
             )
 
@@ -2499,7 +1722,7 @@ class GenomeMultiSummaryPlot:
 """________________________________________ START GenomicDeFinettiPlot ___________________"""
 
 
-class OLDGenomicDeFinettiPlot:
+class GenomicDeFinettiPlot:
     """
     Plots a genomic de Finetti plot with DI filtering and interactive widgets.
     Cursor hover displays individual IDs.
@@ -2518,260 +1741,6 @@ class OLDGenomicDeFinettiPlot:
     in scarce swallowtail butterflies. PLoS Genetics, 21(4), 30. 
     doi:https://doi.org/10.1371/journal.pgen.1011655
 
-    Uses genomes_summary_given_DI
-
-    Args:
-        dPol: DiemType object containing genomic data.
-    """
-    def __init__(self, dPol):
-        self.dPol = dPol
-
-        # ---- initial state ----
-        self.marker_size = 60
-        self.indHIorder = np.arange(len(dPol.indNames))
-
-
-        # initial summaries
-        self.summaries, self.DInumer, self.DIdenom = genomes_summary_given_DI(
-                dPol, float("-inf")
-            )
-
-        # unpack summaries
-        # order: HI, HOM1, HET, HOM2, U
-        self.HOM1 = self.summaries[1]
-        self.HET  = self.summaries[2]
-        self.HOM2 = self.summaries[3]
-        self.U    = self.summaries[4]
-
-        # ---- figure & axes ----
-        self.fig, self.ax = plt.subplots(figsize=(10,10))
-        self._setup_axes()
-        self.ax.set_title('Genomic de Finetti; no DI filter')
-
-        # background: triangle + HW curve
-        self._draw_triangle()
-        self._draw_hwe_curve()
-
-        # points
-        self.scatter = self._draw_points()
-
-        # widgets
-        self._init_widgets()
-
-        # coordinate display
-        self._install_format_coord()
-
-        plt.show()
-
-    # --------------------------------------------------
-    # Helpers
-    # --------------------------------------------------
-
-    @staticmethod
-    def _to_triangle_coords(hom1, het, hom2):
-        x = hom2 + 0.5 * het
-        y = (np.sqrt(3) / 2) * het
-        return x, y
-    
-    def _update_title(self, DIval):
-        prop = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
-
-        self.ax.set_title(
-            "Genomic de Finetti plot  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
-            .format(DIval, self.DInumer, 100 * prop),
-            fontsize=12,
-            pad=12
-        )
-    
-    # --------------------------------------------------
-    # Axes / background
-    # --------------------------------------------------
-
-    def _setup_axes(self):
-        self.ax.set_aspect("equal")
-        self.ax.set_xlim(-0.05, 1.05)
-        self.ax.set_ylim(-0.05, np.sqrt(3) / 2 + 0.05)
-        self.ax.set_xticks([])
-        self.ax.set_yticks([])
-        for spine in self.ax.spines.values():
-            spine.set_visible(False)
-
-        self.ax.set_title("Genomic de Finetti plot")
-
-    def _draw_triangle(self):
-        h = np.sqrt(3) / 2
-        triangle = np.array([[0, 0], [1, 0], [0.5, h]])
-        self.ax.add_patch(
-            Polygon(triangle, closed=True, fill=False, lw=1.2, color="black")
-        )
-
-        self.ax.text(0, -0.04, "HOM1", ha="center", va="top", fontsize=9)
-        self.ax.text(1, -0.04, "HOM2", ha="center", va="top", fontsize=9)
-        self.ax.text(0.5, h + 0.03, "HET", ha="center", va="bottom", fontsize=9)
-
-    def _draw_hwe_curve(self):
-        # Hardy–Weinberg: p^2, 2pq, q^2
-        p = np.linspace(0, 1, 400)
-        hom1 = p**2
-        het  = 2 * p * (1 - p)
-        hom2 = (1 - p)**2
-
-        x, y = self._to_triangle_coords(hom1, het, hom2)
-        self.ax.plot(x, y, color="black", lw=0.8, alpha=0.5)
-
-    # --------------------------------------------------
-    # Points
-    # --------------------------------------------------
-
-    def _blend_colours(self):
-        """
-        Blend colours using HOM1, HET, HOM2, U.
-        Notice: HI is deliberately excluded.
-        """
-    
-        # shape (n_individuals, 4)
-        weights = np.column_stack([
-            self.HOM1,
-            self.HET,
-            self.HOM2,
-            self.U
-        ])
-    
-        # exactly 4 colours, in the same order
-        base_colours = np.array([
-            to_rgb(diemColours[1]),  # HOM1
-            to_rgb(diemColours[2]),  # HET
-            to_rgb(diemColours[3]),  # HOM2
-            to_rgb(diemColours[0]),  # U
-        ])  # shape (4, 3)
-    
-        rgb = weights @ base_colours
-        rgb = np.clip(rgb, 0.0, 1.0)
-    
-        return rgb
-
-    
-    def _draw_points(self):
-        x, y = self._to_triangle_coords(
-            self.HOM1[self.indHIorder],
-            self.HET[self.indHIorder],
-            self.HOM2[self.indHIorder],
-        )
-
-        colours = self._blend_colours()[self.indHIorder]
-
-        return self.ax.scatter(
-            x, y,
-            s=self.marker_size,
-            c=colours,
-            edgecolor="black",
-            linewidth=0.3,
-        )
-
-    def _update_points(self):
-        self.HOM1 = self.summaries[1]
-        self.HET  = self.summaries[2]
-        self.HOM2 = self.summaries[3]
-        self.U = self.summaries[4]
-
-        x, y = self._to_triangle_coords(
-            self.HOM1[self.indHIorder],
-            self.HET[self.indHIorder],
-            self.HOM2[self.indHIorder],
-        )
-
-        self.scatter.set_offsets(np.column_stack([x, y]))
-        self.scatter.set_facecolors(self._blend_colours()[self.indHIorder])
-
-    # --------------------------------------------------
-    # Widgets
-    # --------------------------------------------------
-
-    def _init_widgets(self):
-        DI_span = get_DI_span(self.dPol)
-        self.fig.subplots_adjust(bottom=0.25)
-
-        # DI slider
-        ax_DI = self.fig.add_axes([0.15, 0.12, 0.7, 0.03])
-        self.DI_slider = Slider(
-            ax_DI, "DI",
-            DI_span[0], DI_span[1],
-            valinit=DI_span[0]
-        )
-        self.DI_slider.on_changed(self.DIupdate)
-
-       # size slider
-        ax_SZ = self.fig.add_axes([0.25, 0.10, 0.1, 0.03])
-        self.size_slider = Slider(
-            ax_SZ, "Symbol size",
-            10, 300,
-            valinit=self.marker_size
-        )
-        self.size_slider.on_changed(self.SIZEupdate)
-
-    # --------------------------------------------------
-    # Callbacks
-    # --------------------------------------------------
-
-    def DIupdate(self, val):
-        self.summaries, self.DInumer, self.DIdenom = genomes_summary_given_DI(
-                self.dPol, val
-            )
-    
-        # unpack again (important!)
-        HI, HOM1, HET, HOM2, U = self.summaries
-        self.HOM1 = HOM1
-        self.HET  = HET
-        self.HOM2 = HOM2
-        self.U    = U
-    
-        self._update_points()
-        self._update_title(val)
-    
-        self.fig.canvas.draw_idle()
-
-    
-    def SIZEupdate(self, val):
-        self.marker_size = val
-        self.scatter.set_sizes(np.full(len(self.dPol.indNames), val))
-        self.fig.canvas.draw_idle()
-
-    # --------------------------------------------------
-    # Coordinate display (robust, no events)
-    # --------------------------------------------------
-
-    def _install_format_coord(self):
-        n = len(self.dPol.indNames)
-        tol = 0.03  # proximity in triangle units
-
-        def format_coord(x, y):
-            fallback = "\u2007" * 30
-
-            pts = self.scatter.get_offsets()
-            d = np.hypot(pts[:, 0] - x, pts[:, 1] - y)
-            i = np.argmin(d)
-
-            if d[i] < tol:
-                return f"IndID: {self.dPol.indNames[self.indHIorder[i]]}"
-
-            return fallback
-
-        self.ax.format_coord = format_coord
-
-
-import numpy as np
-import bisect
-import time
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
-from matplotlib.patches import Polygon
-from matplotlib.colors import to_rgb
-
-class GenomicDeFinettiPlot:
-    """
-    Plots a genomic de Finetti plot with DI filtering and interactive widgets.
-    Cursor hover displays individual IDs.
-
     Drop-in extension:
       - optional incremental cache prefill using StatewiseDIIncrementalCache
       - DI slider uses cached results (nearest match within tol)
@@ -2780,6 +1749,9 @@ class GenomicDeFinettiPlot:
     Uses:
       - summaries_from_statewise_counts(statewise counts)
       - StatewiseDIIncrementalCache (fast prefill)
+
+    Args:
+        dPol: DiemType object containing genomic data.
     """
 
     def __init__(
@@ -3096,7 +2068,8 @@ class GenomicDeFinettiPlot:
 
 """________________________________________ START GenomicMultiDeFinettiPlot ___________________"""
 
-class OLDGenomicMultiDeFinettiPlot:
+
+class GenomicMultiDeFinettiPlot:
     """
     Multiple de Finetti plots, one per chromosome,
     all controlled by a shared DI slider and size slider.
@@ -3117,257 +2090,16 @@ class OLDGenomicMultiDeFinettiPlot:
     in scarce swallowtail butterflies. PLoS Genetics, 21(4), 30. 
     doi:https://doi.org/10.1371/journal.pgen.1011655
 
-    Args:
-        dPol: DiemType object containing genomic data.
-        chrom_indices: List of chromosome indices to plot.
-    """
-
-    def __init__(self, dPol, chrom_indices, max_cols=3):
-        self.dPol = dPol
-        self.chrom_indices = self._validate_chrom_indices(chrom_indices)
-        self.max_cols = max_cols
-
-        self.marker_size = 60
-        self.n_ind = len(dPol.indNames)
-        self.indHIorder = np.arange(self.n_ind)
-
-        # ---------- initial statewise computation ----------
-        self.chrom_counts, self.chrom_retained = \
-            statewise_genomes_summary_given_DI(self.dPol, float("-inf"))
-
-        # global summaries (authoritative ordering)
-        self.global_summaries = summaries_from_statewise_counts(self.chrom_counts)
-        self.global_HI = self.global_summaries[0]
-        self.indHIorder = np.argsort(self.global_HI)
-
-        # ---------- layout ----------
-        n_plots = len(self.chrom_indices)
-        n_cols = min(self.max_cols, n_plots)
-        n_rows = int(np.ceil(n_plots / n_cols))
-
-
-        self.fig, self.axes = plt.subplots(
-            n_rows, n_cols,
-            figsize=(4.8 * n_cols, 4.6 * n_rows),
-            squeeze=False
-        )
-
-        #superTitle = self.fig.suptitle('Genomic de Finetti; no DI filter')
-        # no can do... DI slider forces entire plot redraw.
-
-        self.fig.subplots_adjust(
-            left=0.06, right=0.98,
-            top=0.92, bottom=0.32,
-            hspace=0.45, wspace=0.25
-        )
-
-        # ---------- draw ----------
-        self.scatters = {}
-        self.chrom_axes = {}
-
-        axes_flat = self.axes.flatten()
-
-        for ax, idx in zip(axes_flat, self.chrom_indices):
-            self.chrom_axes[idx] = ax
-            self._setup_axes(ax)
-            self._draw_triangle(ax)
-            self._draw_hwe_curve(ax)
-
-            summaries = summaries_from_statewise_counts(
-                [self.chrom_counts[idx]]
-            )
-            _, HOM1, HET, HOM2, U = summaries
-
-            x, y = self._to_triangle_coords(
-                HOM1[self.indHIorder],
-                HET[self.indHIorder],
-                HOM2[self.indHIorder]
-            )
-
-            colours = self._blend_colours(HOM1, HET, HOM2, U)
-
-            sc = ax.scatter(
-                x, y,
-                s=self.marker_size,
-                c=colours[self.indHIorder],
-                edgecolor="black",
-                linewidth=0.3
-            )
-
-            num, denom = self.chrom_retained[idx]
-            ax.set_title(f"Chr {idx} | {num:,}/{denom:,} sites", fontsize=10)
-
-            self.scatters[idx] = sc
-
-        for ax in axes_flat[len(self.chrom_indices):]:
-            ax.axis("off")
-
-        # ---------- widgets ----------
-        self._init_widgets()
-
-        # ---------- hover ----------
-        self._install_format_coord()
-
-        plt.show()
-
-    # ======================================================
-    # Helpers
-    # ======================================================
-
-    @staticmethod
-    def _to_triangle_coords(hom1, het, hom2):
-        x = hom2 + 0.5 * het
-        y = (np.sqrt(3) / 2) * het
-        return x, y
-
-    def _blend_colours(self, HOM1, HET, HOM2, U):
-        weights = np.column_stack([HOM1, HET, HOM2, U])
-        base = np.array([
-            to_rgb(diemColours[1]),
-            to_rgb(diemColours[2]),
-            to_rgb(diemColours[3]),
-            to_rgb(diemColours[0]),
-        ])
-        return np.clip(weights @ base, 0, 1)
-
-    def _setup_axes(self, ax):
-        ax.set_aspect("equal")
-        ax.set_xlim(-0.05, 1.05)
-        ax.set_ylim(-0.05, np.sqrt(3)/2 + 0.05)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for s in ax.spines.values():
-            s.set_visible(False)
-
-    def _draw_triangle(self, ax):
-        h = np.sqrt(3)/2
-        ax.add_patch(Polygon([[0,0],[1,0],[0.5,h]], fill=False, lw=1.2))
-
-        ax.text(0, -0.04, "HOM1", ha="center", va="top", fontsize=8)
-        ax.text(1, -0.04, "HOM2", ha="center", va="top", fontsize=8)
-        ax.text(0.5, h + 0.03, "HET", ha="center", va="bottom", fontsize=8)
-
-    def _draw_hwe_curve(self, ax):
-        p = np.linspace(0,1,400)
-        x,y = self._to_triangle_coords(p*p, 2*p*(1-p), (1-p)**2)
-        ax.plot(x,y,color="black",lw=0.8,alpha=0.5)
-
-    # ======================================================
-    # Widgets
-    # ======================================================
-
-    def _init_widgets(self):
-        DI_span = get_DI_span(self.dPol)
-
-        ax_DI = self.fig.add_axes([0.15, 0.20, 0.70, 0.035])
-        self.DI_slider = Slider(ax_DI, "DI", *DI_span, valinit=DI_span[0])
-        self.DI_slider.on_changed(self._on_DI_change)
-
-        ax_SZ = self.fig.add_axes([0.25, 0.16, 0.1, 0.03])
-        self.size_slider = Slider(ax_SZ, "Symbol size", 10, 300, valinit=self.marker_size)
-        self.size_slider.on_changed(self._on_size_change)
-
-    # ======================================================
-    # Callbacks
-    # ======================================================
-
-    def _on_DI_change(self, val):
-        self.chrom_counts, self.chrom_retained = \
-            statewise_genomes_summary_given_DI(self.dPol, val)
-
-        self.global_summaries = summaries_from_statewise_counts(self.chrom_counts)
-        self.indHIorder = np.argsort(self.global_summaries[0])
-        totNumer = 0
-        totDenom = 0
-
-        for idx in self.chrom_indices:
-            summaries = summaries_from_statewise_counts(
-                [self.chrom_counts[idx]]
-            )
-            _, H1, Ht, H2, U = summaries
-
-            x,y = self._to_triangle_coords(
-                H1[self.indHIorder],
-                Ht[self.indHIorder],
-                H2[self.indHIorder]
-            )
-
-            sc = self.scatters[idx]
-            sc.set_offsets(np.column_stack([x,y]))
-            sc.set_facecolors(
-                self._blend_colours(H1,Ht,H2,U)[self.indHIorder]
-            )
-
-            num, denom = self.chrom_retained[idx]
-            self.chrom_axes[idx].set_title(
-                f"Chr {idx} | {num:,}/{denom:,} sites", fontsize=10
-            )
-            totNumer += num
-            totDenom += denom
-
-        prop = totNumer / totDenom if totDenom > 0 else 0.0
-
-        self.fig.canvas.draw_idle()
-
-    def _on_size_change(self, val):
-        self.marker_size = int(val)
-        for sc in self.scatters.values():
-            sc.set_sizes(np.full(self.n_ind, self.marker_size))
-        self.fig.canvas.draw_idle()
-
-    # ======================================================
-    # Hover
-    # ======================================================
-
-    def _install_format_coord(self):
-        tol = 0.03
-        names = self.dPol.indNames
-
-        for idx, sc in self.scatters.items():
-            ax = self.chrom_axes[idx]
-
-            def make_fmt(sc):
-                def fmt(x,y):
-                    pts = sc.get_offsets()
-                    d = np.hypot(pts[:,0]-x, pts[:,1]-y)
-                    i = np.argmin(d)
-                    if d[i] < tol:
-                        return f"IndID: {names[self.indHIorder[i]]}"
-                    return "\u2007"*30
-                return fmt
-
-            ax.format_coord = make_fmt(sc)
-
-    # ======================================================
-    # Validation
-    # ======================================================
-
-    def _validate_chrom_indices(self, chrom_indices):
-        max_idx = len(self.dPol.chrLengths) - 1
-        valid = [i for i in chrom_indices if 0 <= int(i) <= max_idx]
-        if not valid:
-            raise ValueError("No valid chromosome indices")
-        return valid
-
-
-import numpy as np
-import bisect
-from matplotlib.widgets import Slider
-from matplotlib.patches import Polygon
-from matplotlib.colors import to_rgb
-import matplotlib.pyplot as plt
-
-class GenomicMultiDeFinettiPlot:
-    """
-    Multiple de Finetti plots, one per chromosome,
-    all controlled by a shared DI slider and size slider.
-
     Drop-in extension:
       - optional incremental cache prefill using StatewiseDIIncrementalCache
       - DI slider uses cached results (nearest match within tol)
       - output + hover semantics unchanged
 
     Uses statewise_genomes_summary_given_DI + summaries_from_statewise_counts.
+
+    Args:
+        dPol: DiemType object containing genomic data.
+        chrom_indices: List of chromosome indices to plot.
     """
 
     def __init__(
@@ -3383,6 +2115,7 @@ class GenomicMultiDeFinettiPlot:
     ):
         self.dPol = dPol
         self.chrom_indices = self._validate_chrom_indices(chrom_indices)
+        self.ChrNickNames = [Chr_Nickname(name) for name in dPol.chrNames]
         self.max_cols = max_cols
 
         self.marker_size = 60
@@ -3487,7 +2220,7 @@ class GenomicMultiDeFinettiPlot:
             )
 
             num, denom = self.chrom_retained[idx]
-            ax.set_title(f"Chr {idx} | {num:,}/{denom:,} sites", fontsize=10)
+            ax.set_title(f"{self.ChrNickNames[idx]} | {num:,}/{denom:,} sites", fontsize=10)
 
             self.scatters[idx] = sc
 
@@ -3635,7 +2368,7 @@ class GenomicMultiDeFinettiPlot:
 
             num, denom = self.chrom_retained[idx]
             self.chrom_axes[idx].set_title(
-                f"Chr {idx} | {num:,}/{denom:,} sites", fontsize=10
+                f"{self.ChrNickNames[idx]} | {num:,}/{denom:,} sites", fontsize=10
             )
 
             totNumer += num
@@ -3702,215 +2435,6 @@ class GenomicMultiDeFinettiPlot:
 
 """________________________________________ START GenomicContributionsPlot ___________________"""
 
-class OLDGenomicContributionsPlot:
-    """
-    Plots per-chromosome genomic contributions (HOM1, HET, HOM2, U, excluded)
-    with DI filtering and interactive widgets.
-
-    uses  statewise_genome_summary_given_DI
-
-    Args:
-        dPol: DiemType object containing genomic data.
-    """
-    def __init__(self, dPol, chrom_indices=None):
-        self.dPol = dPol
-        self.chrom_indices = chrom_indices
-        self.fontsize = 8
-
-        # initial computation
-        self.DInumer = 0
-        self.DIdenom = 0
-        self._compute_contributions(float("-inf"))
-
-        # ---- figure & axes ----
-        self.fig, self.ax = plt.subplots(figsize=(10, 5))
-        self.ax.format_coord = None
-        self.fig.subplots_adjust(bottom=0.40, right=0.85)
-     
-        self._draw_bars()
-        self._init_widgets()
-
-        self.ax.set_title('Genomic Contributions; no DI filter')
-
-        plt.show()
-
-    # --------------------------------------------------
-    # Core computation
-    # --------------------------------------------------
-
-    def _compute_contributions(self, DIval):
-        chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(
-            self.dPol, DIval
-        )
-
-        # --------------------------------------------------
-        # Restrict chromosomes if requested (surgical)
-        # --------------------------------------------------
-        if self.chrom_indices is not None:
-            kept = []
-            n_chr = len(chrom_counts)
-
-            for ci in self.chrom_indices:
-                if isinstance(ci, int) and 0 <= ci < n_chr:
-                    kept.append(ci)
-
-            if not kept:
-                raise ValueError("GenomicContributionsPlot: no valid chromosome indices")
-
-        else:
-            kept = range(len(chrom_counts))
-
-        # --------------------------------------------------
-        # Aggregate over kept chromosomes
-        # --------------------------------------------------
-        self.DInumer = 0
-        self.DIdenom = 0
-
-        self.chrom_labels = []
-        self.props = np.zeros((len(kept), 5))  # HOM1, HET, HOM2, U, excluded
-
-        for out_i, chr_i in enumerate(kept):
-            chr_name = Chr_Nickname(self.dPol.chrNames[chr_i])
-            self.chrom_labels.append(chr_name)
-
-            counts = chrom_counts[chr_i]
-            kept_sites, total_sites = chrom_retained[chr_i]
-
-            self.DInumer += kept_sites
-            self.DIdenom += total_sites
-
-            c0 = np.sum(counts["counts0"])
-            c1 = np.sum(counts["counts1"])
-            c2 = np.sum(counts["counts2"])
-            c3 = np.sum(counts["counts3"])
-
-            total_alleles = total_sites * np.sum(self.dPol.chrPloidies[chr_i])
-            if total_alleles == 0:
-                continue
-
-            self.props[out_i, :] = [
-                c1 / total_alleles,                                   # HOM1
-                c2 / total_alleles,                                   # HET
-                c3 / total_alleles,                                   # HOM2
-                c0 / total_alleles,                                   # U
-                (1.0 - kept_sites / total_sites) if total_sites else 0
-            ]
-
-        self.current_DI = DIval
-
-
-    # --------------------------------------------------
-    # Drawing
-    # --------------------------------------------------
-
-    def _draw_bars(self):
-        self.ax.clear()
-
-        x = np.arange(len(self.chrom_labels))
-        bottoms = np.zeros(len(x))
-
-        colours = [
-            diemColours[1],  # HOM1
-            diemColours[2],  # HET
-            diemColours[3],  # HOM2
-            "lightgray",                # U
-            "white",                    # excluded
-        ]
-
-        labels = ["HOM1", "HET", "HOM2", "U", "<DI"]
-
-        for i in range(5):
-            self.ax.bar(
-                x,
-                self.props[:, i],
-                bottom=bottoms,
-                color=colours[i],
-                edgecolor="black" if i == 4 else None,
-                linewidth=0.4 if i == 4 else 0,
-                label=labels[i],
-            )
-            bottoms += self.props[:, i]
-
-        self.ax.set_xlim(-0.5, len(x) - 0.5)
-        self.ax.set_ylim(0, 1)
-
-        self.ax.set_xticks(x)
-        self.ax.set_xticklabels(
-            self.chrom_labels,
-            rotation=90,
-            fontsize=self.fontsize,
-            ha="center",
-        )
-
-        self.ax.set_ylabel("Proportion of SNVs")
-
-        prop = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
-
-        self.ax.set_title(
-            "Genomic contributions plot  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
-            .format(self.current_DI, self.DInumer, 100 * prop),
-            fontsize=12,
-            pad=12
-        )
-
-        # legend outside plot
-        self.ax.legend(
-            loc="upper left",
-            bbox_to_anchor=(1.01, 1.0),
-            fontsize=8,
-            frameon=False,
-        )
-
-        self.fig.canvas.draw_idle()
-
-    # --------------------------------------------------
-    # Widgets
-    # --------------------------------------------------
-
-    def _init_widgets(self):
-        DI_span = get_DI_span(self.dPol)
-
-        # DI slider (lower, wide)
-        ax_DI = self.fig.add_axes([0.15, 0.20, 0.70, 0.03])
-        self.DI_slider = Slider(
-            ax_DI,
-            "DI",
-            DI_span[0],
-            DI_span[1],
-            valinit=DI_span[0],
-        )
-        self.DI_slider.on_changed(self.DIupdate)
-
-        # Font size slider (narrow, left)
-        ax_FS = self.fig.add_axes([0.15, 0.13, 0.15, 0.03])
-        self.font_slider = Slider(
-            ax_FS,
-            "Label font size",
-            4,
-            16,
-            valinit=self.fontsize,
-            valstep=1,
-        )
-        self.font_slider.on_changed(self.FONTupdate)
-
-    # --------------------------------------------------
-    # Callbacks
-    # --------------------------------------------------
-
-    def DIupdate(self, val):
-        self._compute_contributions(val)
-        self._draw_bars()
-
-    def FONTupdate(self, val):
-        self.fontsize = int(val)
-        self._draw_bars()
-
-
-
-import numpy as np
-import bisect
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
 
 class GenomicContributionsPlot:
     """
@@ -3923,6 +2447,9 @@ class GenomicContributionsPlot:
       - output unchanged
 
     Uses statewise_genomes_summary_given_DI (or cached equivalent).
+
+    Args:
+    dPol: DiemType object containing genomic data.
     """
 
     def __init__(
@@ -4239,6 +2766,14 @@ class IndGenomicContributionsPlot:
     - optional incremental cache prefill via StatewiseDIIncrementalCache
 
     Uses: statewise_genomes_summary_given_DI
+
+    c.f. 
+    Figure 2, Figure 4:
+    Petružela, J., Nürnberger, B., Ribas, A., Koutsovoulos, G., Čížková, 
+    D., Fornůsková, A., Aghová, T., Blaxter, M., de Bellocq, J.G. and Baird, S.J.E. 
+    (2025), Comparative Genomic Analysis of Co-Occurring Hybrid Zones 
+    of House Mouse Parasites Pneumocystis murina and Syphacia obvelata 
+    Using Genome Polarisation. Mol Ecol, 34: e70044. https://doi.org/10.1111/mec.70044
     """
 
     def __init__(
@@ -4541,7 +3076,7 @@ class IndGenomicContributionsPlot:
         self.font_slider.on_changed(self.FONTupdate)
 
         # reorder button
-        ax_RE = self.fig.add_axes([0.8, 0.025, 0.1, 0.04])#[0.70, 0.105, 0.15, 0.045])# EURG
+        ax_RE = self.fig.add_axes([0.8, 0.025, 0.1, 0.04])#[0.70, 0.105, 0.15, 0.045]) # EURG
         self.reorder_button = Button(
             ax_RE,
             "Reorder by HI",
@@ -4704,47 +3239,39 @@ def _pwmatrix_row(i, G, W):
 
 
 #------------------version without char sidestep-------------------------------
-def _OLDpwmatrix_row_numeric(i, G, W):
-    """
-    Compute one row of the pairwise distance matrix from numeric codes.
-    """
-    n = G.shape[0]
-    row = np.zeros(n, dtype=float)
 
-    ai = G[i]
-    for j in range(n):
-        aj = G[j]
 
-        valid = (ai != 0) & (aj != 0)
-        denom = valid.sum()
-
-        if denom == 0:
-            row[j] = np.nan
-        else:
-            row[j] = W[ai[valid], aj[valid]].sum() / denom
-
-    return i, row
 
 def _pwmatrix_row_numeric(i, G, W):
+    """
+    Compute one row of the pairwise distance matrix from numeric codes.
+
+    Distance definition (see also diem2fasta.py):
+      - exclude sites where either is Unencodable (0)
+      - per-site contributions via W
+      - normalize by 2 so HET×HET -> 0.5 and HOM1×HOM2 -> 1.0
+      - diagonal is within-individual: 0.5 per HET site, 0 otherwise, excluding Unencodable
+    """
     n = G.shape[0]
-    row = np.zeros(n, dtype=float)
+    row = np.full(n, np.nan, dtype=float)  # default NaN if no valid sites
 
     ai = G[i]
+    ai_ok = (ai != 0)
+
     for j in range(n):
         aj = G[j]
 
         if i == j:
-            # Self-comparison: include all retained sites so diagonal is always defined.
-            valid = np.ones_like(ai, dtype=bool)
+            # within-individual: exclude unencodable sites
+            valid = ai_ok
         else:
-            # Pairwise: exclude unknowns (0) exactly as before.
-            valid = (ai != 0) & (aj != 0)
+            # pairwise: exclude sites where either is unencodable
+            valid = ai_ok & (aj != 0)
 
         denom = int(valid.sum())
-        if denom == 0:
-            row[j] = np.nan
-        else:
-            row[j] = W[ai[valid], aj[valid]].sum() / denom
+        if denom:
+            # divide by 2 to implement "average over phases" (partial credit)
+            row[j] = W[ai[valid], aj[valid]].sum() / (2.0 * denom)
 
     return i, row
 
@@ -4791,8 +3318,11 @@ def PARApwmatrixFromDiemType(
         if not np.any(keep):
             continue
 
-        # Clamp states: anything >2 → 3  (DMBCtoucher future-proofing)
-        SMf = np.minimum(SM[:, keep], 3).astype(np.int8)
+
+        # DMBC toucher: any int8 greater than 3 goes lto Derek state 0: U
+        SMk = SM[:, keep]
+        SMf = np.where((SMk >= 0) & (SMk <= 3), SMk, 0).astype(np.int8)
+
         chunks.append(SMf)
 
     if not chunks:
@@ -4835,8 +3365,13 @@ def PARApwmatrixFromDiemType(
     return M
 #-------------------------------------------------
 
-
-class OLDdiemPairsPlot:
+class diemPairsPlot:
+    """
+    Pairwise distance plot using BRICK rectangles (no imshow), now with:
+      - DI slider
+      - Reorder by HI button
+      - optional incremental cache prefill (pairwise + optional HI/statewise)
+    """
     """
     Pairwise distance plot using brickDiagram semantics.
 
@@ -4860,226 +3395,11 @@ class OLDdiemPairsPlot:
 
     Hover:
         Shows "IndA × IndB : distance".
-    """
 
-    def __init__(self, dPol, DIthreshold=float("-inf"), figsize=(9, 6)):
-        self.dPol = dPol
-        self.DIthreshold = DIthreshold
-
-        # -------------------------------------------------
-        # Compute HI ordering (authoritative)
-        # -------------------------------------------------
-        summaries, _, _ = genomes_summary_given_DI(dPol, DIthreshold)
-        HI = summaries[0]
-        self.ind_order = np.argsort(HI)
-
-        self.indNames = np.array(dPol.indNames)[self.ind_order]
-        self.n = len(self.indNames)
-
-        # -------------------------------------------------
-        # Compute pairwise matrix
-        # -------------------------------------------------
-        self.M = PARApwmatrixFromDiemType(
-            dPol,
-            DIthreshold=DIthreshold
-            #n_jobs=-1 
-        )
-
-        # apply ordering once
-        self.M = self.M[self.ind_order][:, self.ind_order]
-
-        # -------------------------------------------------
-        # Figure layout
-        # -------------------------------------------------
-        self.fig = plt.figure(figsize=figsize)
-        gs = self.fig.add_gridspec(
-            nrows=1,
-            ncols=2,
-            width_ratios=[20, 1],
-            wspace=0.08
-        )
-
-        self.ax = self.fig.add_subplot(gs[0, 0])
-        self.cax = self.fig.add_subplot(gs[0, 1])
-
-        # -------------------------------------------------
-        # Colormap
-        # -------------------------------------------------
-        self.cmap = LinearSegmentedColormap.from_list(
-            "soft_coolwarm",
-            ["#1e90ff", "white", "#fff266", "#ff1a1a"]
-        )
-
-        self.vmin = np.nanmin(self.M)
-        self.vmax = np.nanmax(self.M)
-
-        # -------------------------------------------------
-        # Draw heatmap as bricks
-        # -------------------------------------------------
-        self._draw_bricks()
-
-        # -------------------------------------------------
-        # Axes formatting
-        # -------------------------------------------------
-        self.ax.set_xlim(0, self.n)
-        self.ax.set_ylim(0, self.n)
-        self.ax.set_aspect("equal")
-
-        centers = np.arange(self.n) + 0.5
-        self.ax.set_xticks(centers)
-        self.ax.set_yticks(centers)
-        self.ax.set_xticklabels(self.indNames, rotation=90, fontsize=7)
-        self.ax.set_yticklabels(self.indNames, fontsize=7)
-
-        self.ax.set_title(
-            f"Pairwise distances (DI ≥ {DIthreshold:.2f})",
-            pad=10
-        )
-
-        # -------------------------------------------------
-        # Colour key
-        # -------------------------------------------------
-        self._draw_colour_key()
-        # -------------------------------------------------
-        # Font slider
-        # -------------------------------------------------
-        self._init_font_slider()
-        # -------------------------------------------------
-        # Hover browsing
-        # -------------------------------------------------
-        self._install_format_coord()
-
-        plt.show()
-
-    # =================================================
-    # Font size slider
-    # =================================================
-
-    def _init_font_slider(self):
-        # create a small axis directly beneath the colour key
-        pos = self.cax.get_position()
-        slider_height = 0.035
-
-        ax_fs = self.fig.add_axes([
-            pos.x0,
-            pos.y0 - slider_height - 0.015,
-            pos.width,
-            slider_height
-        ])
-
-        self.label_fontsize = 4 #was 7
-
-        self.font_slider = Slider(
-            ax_fs,
-            "Labels",
-            0,# EURGfont
-            6,
-            valinit=self.label_fontsize,
-            valstep=1
-        )
-
-        self.font_slider.on_changed(self._on_fontsize_change)
-
-    # =================================================
-    # Drawing
-    # =================================================
-
-    def _draw_bricks(self):
-        norm = plt.Normalize(self.vmin, self.vmax)
-
-        for i in range(self.n):
-            for j in range(self.n):
-                val = self.M[j, i]
-                if not np.isfinite(val):
-                    color = "black"
-                else:
-                    color = self.cmap(norm(val))
-
-                rect = Rectangle(
-                    (i, j),
-                    1, 1,
-                    facecolor=color,
-                    edgecolor="none"
-                )
-                self.ax.add_patch(rect)
-
-    def _draw_colour_key(self):
-        gradient = np.linspace(self.vmin, self.vmax, 256).reshape(-1, 1)
-        self.cax.imshow(
-            gradient,
-            aspect="auto",
-            cmap=self.cmap,
-            origin="lower"
-        )
-        self.cax.set_yticks([0, 255])
-        self.cax.set_yticklabels(
-            [f"{self.vmin:.2f}", f"{self.vmax:.2f}"],
-            fontsize=8
-        )
-        self.cax.set_xticks([])
-        self.cax.set_title("Distance", fontsize=9)
-
-    # =================================================
-    # Call backs
-    # =================================================
-
-    def _on_fontsize_change(self, val):
-        fs = int(val)
-        self.label_fontsize = fs
-
-        for lbl in self.ax.get_xticklabels():
-            lbl.set_fontsize(fs)
-        for lbl in self.ax.get_yticklabels():
-            lbl.set_fontsize(fs)
-
-        self.fig.canvas.draw_idle()
-    # =================================================
-    # Hover logic
-    # =================================================
-
-    def _install_format_coord(self):
-        n = self.n
-
-        def format_coord(x, y):
-            fallback = " " * 40
-
-            i = int(np.floor(x))
-            j = int(np.floor(y))
-
-            if 0 <= i < n and 0 <= j < n:
-                a = self.indNames[j]
-                b = self.indNames[i]
-                d = self.M[j, i]
-                if np.isfinite(d):
-                    return f"{a} × {b} : {d:.3f}"
-                return f"{a} × {b} : NA"
-
-            return fallback
-
-        self.ax.format_coord = format_coord
-
-
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from matplotlib.widgets import Slider, Button
-from matplotlib.colors import LinearSegmentedColormap
-
-# Assumes these exist in your module namespace:
-# - get_DI_span
-# - genomes_summary_given_DI
-# - statewise_genomes_summary_given_DI
-# - summaries_from_statewise_counts
-# - PARApwmatrixFromDiemType
-# - StatewiseDIIncrementalCache (optional)
-# - PairwiseDIIncrementalCache (the incremental helper we added)
-
-class diemPairsPlot:
-    """
-    Pairwise distance plot using BRICK rectangles (no imshow), now with:
+    New features:
       - DI slider
       - Reorder by HI button
-      - optional incremental cache prefill (pairwise + optional HI/statewise)
+      - incremental cache prefill (pairwise + optional HI/statewise)
     """
 
     def __init__(
@@ -5090,10 +3410,10 @@ class diemPairsPlot:
         chrom_indices=None,
 
         # caching options
-        prefill_cache=False,
+        prefill_cache=True,
         prefill_step=None,
         cache_tol=None,
-        progress="text",                 # None | "text"
+        progress=None,                 # None | "text"
         cache_statewise_for_HI=True,   # True recommended if you already have StatewiseDIIncrementalCache
     ):
         self.dPol = dPol
@@ -5274,29 +3594,6 @@ class diemPairsPlot:
     # Main bricks: create once, update facecolors later
     # =================================================
 
-    def _OLDinit_bricks(self):
-        self.ax.patches.clear()
-
-        norm = plt.Normalize(self.vmin, self.vmax)
-        self._norm = norm
-
-        # store patches in a flat list for fast updates
-        self._bricks = []
-
-        # IMPORTANT: preserve your original orientation: val = M[j, i] drawn at (i, j)
-        for i in range(self.n):
-            for j in range(self.n):
-                val = self.M[j, i]
-                rect = Rectangle(
-                    (i, j), 1, 1,
-                    facecolor=self._color_for_val(val, norm),
-                    edgecolor="none"
-                )
-                self.ax.add_patch(rect)
-                self._bricks.append(rect)
-
-        self.fig.canvas.draw_idle()
-
     def _init_bricks(self):
         # Remove only previously created bricks (do NOT use self.ax.patches.clear())
         if hasattr(self, "_bricks"):
@@ -5397,7 +3694,7 @@ class diemPairsPlot:
 
     def _init_widgets(self):
         # DI slider
-        ax_DI = self.fig.add_axes([0.18, 0.10, 0.62, 0.03])
+        ax_DI = self.fig.add_axes([0.18, 0.10, 0.52, 0.03])
         self.DI_slider = Slider(ax_DI, "DI", self.di_min, self.di_max, valinit=self.di_min)
         self.DI_slider.on_changed(self._on_DI_change)
 
@@ -5481,6 +3778,8 @@ class diemPairsPlot:
 """________________________________________ START DiemMultiPairsPlot__________________"""
 
 
+
+
 class diemMultiPairsPlot:
     """
     Multi-chromosome version of diemPairsPlot.
@@ -5489,7 +3788,13 @@ class diemMultiPairsPlot:
     arranged in a grid. The top-right grid cell contains the shared
     colour key.
 
-    A single slider controls axis label font size for all subplots.
+    Widgets:
+      - DI slider (updates matrices, keeps current order)
+      - Reorder by HI button (recomputes order at current DI)
+      - Label font size slider (all subplots)
+
+    Optional:
+      - prefill caching (pairwise per chromosome + optional HI/statewise)
     """
 
     def __init__(
@@ -5499,59 +3804,84 @@ class diemMultiPairsPlot:
         DIthreshold=float("-inf"),
         max_cols=3,
         figsize=(12, 8),
+
+        # caching options
+        prefill_cache=True,
+        prefill_step=None,
+        cache_tol=None,
+        progress=None,                 # None | "text"
+        cache_statewise_for_HI=True,   # True recommended if using cache
+
+        # layout tweak
+        row_hspace=0.60,
+        col_wspace=0.35,
     ):
         self.dPol = dPol
-        self.chrom_indices = list(chrom_indices)
-        self.DIthreshold = DIthreshold
+        self.chrom_indices = [int(i) for i in chrom_indices]
+        self.chrom_indices = self._validate_chrom_indices(chrom_indices)
+        self.ChrNickNames = [Chr_Nickname(name) for name in dPol.chrNames]
+        self.current_DI = float(DIthreshold)
 
-        # -------------------------------------------------
-        # Global HI ordering (authoritative, once)
-        # -------------------------------------------------
-        summaries, _, _ = genomes_summary_given_DI(dPol, DIthreshold)
-        HI = summaries[0]
-        self.ind_order = np.argsort(HI)
+        # ---------- DI span / grid ----------
+        DI_span = get_DI_span(self.dPol)
+        self.di_min, self.di_max = float(DI_span[0]), float(DI_span[1])
 
-        self.indNames = np.array(dPol.indNames)[self.ind_order]
+        if prefill_step is None:
+            span = self.di_max - self.di_min
+            prefill_step = span / 200.0 if span > 0 else 1.0
+
+        if cache_tol is None:
+            cache_tol = float(prefill_step) / 2.0
+        self._cache_tol = float(cache_tol)
+
+        self.di_grid = self._build_di_grid(self.di_min, self.di_max, float(prefill_step))
+
+        # ---------- optional caches ----------
+        self._inc_statewise = None
+        self._inc_pairwise_by_chr = {}  # chr_idx -> PairwiseDIIncrementalCache
+
+        if prefill_cache:
+            for chr_idx in self.chrom_indices:
+                self._inc_pairwise_by_chr[chr_idx] = PairwiseDIIncrementalCache(
+                    self.dPol,
+                    di_grid=self.di_grid,
+                    chrom_indices=[chr_idx],
+                    progress=("text" if progress == "text" else None),
+                    label=f"MultiPairsPlot chr{chr_idx} matrix cache prefill",
+                    snapshot_dtype=np.float32,
+                ).prefill()
+
+            if cache_statewise_for_HI:
+                self._inc_statewise = StatewiseDIIncrementalCache(
+                    self.dPol,
+                    di_grid=self.di_grid,
+                    progress=("text" if progress == "text" else None),
+                    label="MultiPairsPlot HI cache prefill",
+                ).prefill()
+
+        # ---------- initial ordering by HI at current DI ----------
+        self.ind_order = None
+        self._compute_order_for_DI(self.current_DI)
+
+        self.indNames = np.array(self.dPol.indNames)[self.ind_order]
         self.n = len(self.indNames)
 
-        # -------------------------------------------------
-        # Compute per-chromosome matrices
-        # -------------------------------------------------
+        # ---------- initial matrices at current DI ----------
         self.Ms = []
-        vmins, vmaxs = [], []
+        self._compute_matrices_for_DI(self.current_DI, keep_order=True)
 
-        for chr_idx in self.chrom_indices:
-            M = PARApwmatrixFromDiemType(
-                dPol,
-                DIthreshold=DIthreshold,
-                chrom_indices=[chr_idx],
-            )
-            M = M[self.ind_order][:, self.ind_order]
-            self.Ms.append(M)
-
-            finite = np.isfinite(M)
-            if np.any(finite):
-                vmins.append(np.nanmin(M))
-                vmaxs.append(np.nanmax(M))
-
-        self.vmin = min(vmins) if vmins else 0.0
-        self.vmax = max(vmaxs) if vmaxs else 1.0
-
-        # -------------------------------------------------
-        # Grid layout
-        # -------------------------------------------------
+        # ---------- figure / grid layout ----------
         n_plots = len(self.chrom_indices)
         n_cols = min(max_cols, n_plots)
         n_rows = int(np.ceil(n_plots / n_cols))
 
-        # +1 cell for colour key (top-right)
         self.fig = plt.figure(figsize=figsize)
         gs = self.fig.add_gridspec(
             n_rows,
             n_cols + 1,
             width_ratios=[20] * n_cols + [1.6],
-            hspace=0.35,
-            wspace=0.35,   # ← more x-space for labels
+            hspace=float(row_hspace),
+            wspace=float(col_wspace),
         )
 
         self.axes = []
@@ -5561,86 +3891,184 @@ class diemMultiPairsPlot:
                 if idx < n_plots:
                     self.axes.append(self.fig.add_subplot(gs[r, c]))
 
-        # shared colour key: top-right
-        self.cax = self.fig.add_subplot(gs[0, -1])
+        self.cax = self.fig.add_subplot(gs[0, -1])  # colour key
 
-        # -------------------------------------------------
-        # Colormap
-        # -------------------------------------------------
+        # room at bottom for widgets
+        self.fig.subplots_adjust(bottom=0.20)
+
+        # ---------- colormap ----------
         self.cmap = LinearSegmentedColormap.from_list(
             "soft_coolwarm",
             ["#1e90ff", "white", "#fff266", "#ff1a1a"],
         )
 
-        self.fontsize = 4 # was 7
+        # ---------- style state ----------
+        self.fontsize = 4
 
-        # -------------------------------------------------
-        # Draw chromosome subplots
-        # -------------------------------------------------
-        for ax, M, chr_idx in zip(self.axes, self.Ms, self.chrom_indices):
-            self._draw_bricks(ax, M)
-            self._format_axes(ax, chr_idx)
+        # ---------- draw once (persistent patches) ----------
+        self._setup_axes_all()
+        self._init_bricks_all()
+        self._init_colour_key()
 
-        # -------------------------------------------------
-        # Colour key + widgets
-        # -------------------------------------------------
-        self._draw_colour_key()
-        self._init_font_slider()
+        # ---------- widgets ----------
+        self._init_widgets()
+
+        # ---------- hover ----------
         self._install_format_coord()
 
         plt.show()
 
     # =================================================
-    # Drawing
+    # DI grid helpers
     # =================================================
+    @staticmethod
+    def _build_di_grid(di_min, di_max, step):
+        if di_max > di_min:
+            n_steps = int(np.floor((di_max - di_min) / step))
+            vals = di_min + step * np.arange(n_steps + 1, dtype=float)
+            vals = np.clip(vals, di_min, di_max)
+            vals[-1] = di_max
+        else:
+            vals = np.array([di_min], dtype=float)
+        return np.asarray(vals, dtype=float)
 
-    def _draw_bricks(self, ax, M):
-        norm = plt.Normalize(self.vmin, self.vmax)
+    def _nearest_grid_value(self, di):
+        di = float(di)
+        j = int(np.argmin(np.abs(self.di_grid - di)))
+        return float(self.di_grid[j])
 
-        for i in range(self.n):
-            for j in range(self.n):
-                val = M[j, i]
-                if not np.isfinite(val):
-                    color = "black"
-                else:
-                    color = self.cmap(norm(val))
+    # =================================================
+    # Computation
+    # =================================================
+    def _get_HI_for_DI(self, DIthreshold):
+        if self._inc_statewise is not None:
+            di_key = self._nearest_grid_value(DIthreshold)
+            chrom_counts, _ = self._inc_statewise._snapshots[di_key]
+            summaries = summaries_from_statewise_counts(chrom_counts)
+            return summaries[0]
 
-                ax.add_patch(
-                    Rectangle(
-                        (i, j),
-                        1,
-                        1,
-                        facecolor=color,
-                        edgecolor="none",
-                    )
-                )
+        summaries, _, _ = genomes_summary_given_DI(self.dPol, DIthreshold)
+        return summaries[0]
 
-        ax.set_xlim(0, self.n)
-        ax.set_ylim(0, self.n)
-        ax.set_aspect("equal")
+    def _compute_order_for_DI(self, DIthreshold):
+        HI = self._get_HI_for_DI(DIthreshold)
+        self.ind_order = np.argsort(HI)
 
-    def _format_axes(self, ax, chr_idx):
+    def _get_M_chr_for_DI(self, chr_idx, DIthreshold):
+        chr_idx = int(chr_idx)
+        if chr_idx in self._inc_pairwise_by_chr:
+            return self._inc_pairwise_by_chr[chr_idx].get(DIthreshold)
+
+        return PARApwmatrixFromDiemType(
+            self.dPol,
+            DIthreshold=float(DIthreshold),
+            chrom_indices=[chr_idx],
+        )
+
+    def _compute_matrices_for_DI(self, DIthreshold, *, keep_order=True):
+        """
+        Recompute per-chromosome matrices at DIthreshold.
+        If keep_order=True, use existing self.ind_order.
+        """
+        self.current_DI = float(DIthreshold)
+
+        if not keep_order or self.ind_order is None:
+            self._compute_order_for_DI(self.current_DI)
+
+        self.indNames = np.array(self.dPol.indNames)[self.ind_order]
+        self.n = len(self.indNames)
+
+        Ms = []
+        vmins, vmaxs = [], []
+
+        for chr_idx in self.chrom_indices:
+            M = self._get_M_chr_for_DI(chr_idx, self.current_DI)
+            M = M[self.ind_order][:, self.ind_order]
+            Ms.append(M)
+
+            finite = np.isfinite(M)
+            if np.any(finite):
+                vmins.append(np.nanmin(M))
+                vmaxs.append(np.nanmax(M))
+
+        self.Ms = Ms
+        self.vmin = min(vmins) if vmins else 0.0
+        self.vmax = max(vmaxs) if vmaxs else 1.0
+
+    # =================================================
+    # Drawing setup
+    # =================================================
+    def _setup_axes_all(self):
         centers = np.arange(self.n) + 0.5
 
-        ax.set_xticks(centers)
-        ax.set_yticks(centers)
+        for ax, chr_idx in zip(self.axes, self.chrom_indices):
+            ax.set_xlim(0, self.n)
+            ax.set_ylim(0, self.n)
+            ax.set_aspect("equal")
 
-        ax.set_xticklabels(
-            self.indNames,
-            rotation=90,
-            fontsize=self.fontsize,
-        )
-        ax.set_yticklabels(
-            self.indNames,
-            fontsize=self.fontsize,
-        )
+            ax.set_xticks(centers)
+            ax.set_yticks(centers)
 
-        ax.set_title(f"Chr {chr_idx}", fontsize=10, pad=8)
+            ax.set_xticklabels(self.indNames, rotation=90, fontsize=self.fontsize)
+            ax.set_yticklabels(self.indNames, fontsize=self.fontsize)
 
-    def _draw_colour_key(self):
-        gradient = np.linspace(self.vmin, self.vmax, 256).reshape(-1, 1)
+            ax.set_title(self.ChrNickNames[int(chr_idx)], fontsize=10, pad=8)
 
-        self.cax.imshow(
+        self.fig.suptitle(f"Pairwise distances (DI ≥ {self.current_DI:.3f})", y=0.98)
+
+    def _color_for_val(self, val, norm):
+        if not np.isfinite(val):
+            return "black"
+        return self.cmap(norm(val))
+
+    # =================================================
+    # Bricks: create once, update facecolors later
+    # =================================================
+    def _init_bricks_all(self):
+        self._bricks_by_ax = []  # list aligned with self.axes / self.Ms
+        norm = plt.Normalize(self.vmin, self.vmax)
+        self._norm = norm
+
+        for ax, M in zip(self.axes, self.Ms):
+            bricks = []
+            for i in range(self.n):
+                for j in range(self.n):
+                    val = M[j, i]
+                    rect = Rectangle(
+                        (i, j), 1, 1,
+                        facecolor=self._color_for_val(val, norm),
+                        edgecolor="none",
+                    )
+                    ax.add_patch(rect)
+                    bricks.append(rect)
+            self._bricks_by_ax.append(bricks)
+
+        self.fig.canvas.draw_idle()
+
+    def _update_bricks_all(self):
+        norm = plt.Normalize(self.vmin, self.vmax)
+        self._norm = norm
+
+        for bricks, M, ax in zip(self._bricks_by_ax, self.Ms, self.axes):
+            k = 0
+            for i in range(self.n):
+                for j in range(self.n):
+                    val = M[j, i]
+                    bricks[k].set_facecolor(self._color_for_val(val, norm))
+                    k += 1
+
+        self.fig.suptitle(f"Pairwise distances (DI ≥ {self.current_DI:.3f})", y=0.98)
+        self.fig.canvas.draw_idle()
+
+    # =================================================
+    # Colour key
+    # =================================================
+    def _init_colour_key(self):
+        self.cax.clear()
+        self._key_bins = 256
+        gradient = np.linspace(self.vmin, self.vmax, self._key_bins).reshape(-1, 1)
+
+        self._key_im = self.cax.imshow(
             gradient,
             aspect="auto",
             cmap=self.cmap,
@@ -5648,78 +4076,135 @@ class diemMultiPairsPlot:
         )
 
         self.cax.set_xticks([])
-        self.cax.set_yticks([0, 255])
-        self.cax.set_yticklabels(
-            [f"{self.vmin:.2f}", f"{self.vmax:.2f}"],
-            fontsize=8,
-        )
+        self.cax.set_yticks([0, self._key_bins - 1])
+        self.cax.set_yticklabels([f"{self.vmin:.2f}", f"{self.vmax:.2f}"], fontsize=8)
         self.cax.set_title("Distance", fontsize=9)
+
+        self.fig.canvas.draw_idle()
+
+    def _update_colour_key(self):
+        gradient = np.linspace(self.vmin, self.vmax, self._key_bins).reshape(-1, 1)
+        self._key_im.set_data(gradient)
+        self._key_im.set_clim(self.vmin, self.vmax)
+
+        self.cax.set_yticklabels([f"{self.vmin:.2f}", f"{self.vmax:.2f}"], fontsize=8)
+        self.fig.canvas.draw_idle()
+
+    # =================================================
+    # Widgets
+    # =================================================
+    def _init_widgets(self):
+        # DI slider
+        ax_DI = self.fig.add_axes([0.15, 0.10, 0.60, 0.03])
+        self.DI_slider = Slider(ax_DI, "DI", self.di_min, self.di_max, valinit=self.di_min)
+        self.DI_slider.on_changed(self._on_DI_change)
+
+        # Reorder button
+        ax_RE = self.fig.add_axes([0.88, 0.10, 0.08, 0.035])
+        self.reorder_button = Button(ax_RE, "Reorder by HI", hovercolor="0.95", color="red")
+        self.reorder_button.on_clicked(self._on_reorder)
+
+        # Font slider under colour key (your original location)
+        pos = self.cax.get_position()
+        ax_FS = self.fig.add_axes([pos.x0, 0.04, pos.width*2, 0.03])
+        self.font_slider = Slider(ax_FS, "Labels", 0, 8, valinit=self.fontsize, valstep=1)
+        self.font_slider.on_changed(self._on_font_change)
+
+    # =================================================
+    # Callbacks
+    # =================================================
+    def _on_DI_change(self, val):
+        # If cached, snap to nearest grid DI
+        if self._inc_pairwise_by_chr or (self._inc_statewise is not None):
+            di_eff = self._nearest_grid_value(val)
+        else:
+            di_eff = float(val)
+
+        # keep current ordering during slider motion
+        self._compute_matrices_for_DI(di_eff, keep_order=True)
+
+        # update bricks + key
+        self._update_bricks_all()
+        self._update_colour_key()
+
+    def _on_reorder(self, event=None):
+        # recompute ordering at current DI, and recompute matrices with new order
+        self._compute_matrices_for_DI(self.current_DI, keep_order=False)
+
+        # update tick labels everywhere
+        centers = np.arange(self.n) + 0.5
+        for ax, chr_idx in zip(self.axes, self.chrom_indices):
+            ax.set_xticks(centers)
+            ax.set_yticks(centers)
+            ax.set_xticklabels(self.indNames, rotation=90, fontsize=self.fontsize)
+            ax.set_yticklabels(self.indNames, fontsize=self.fontsize)
+            ax.set_title(self.ChrNickNames[int(chr_idx)], fontsize=10, pad=8)
+
+        self._update_bricks_all()
+        self._update_colour_key()
+
+    def _on_font_change(self, val):
+        self.fontsize = int(val)
+        for ax in self.axes:
+            ax.set_xticklabels(self.indNames, rotation=90, fontsize=self.fontsize)
+            ax.set_yticklabels(self.indNames, fontsize=self.fontsize)
+        self.fig.canvas.draw_idle()
+
+    # ==================================================
+    # Validation
+    # ==================================================
+
+    def _validate_chrom_indices(self, chrom_indices):
+        max_idx = len(self.dPol.chrLengths) - 1
+        valid, rejected = [], []
+
+        for idx in chrom_indices:
+            if isinstance(idx, (int, np.integer)) and 0 <= int(idx) <= max_idx:
+                valid.append(int(idx))
+            else:
+                rejected.append(idx)
+
+        if rejected:
+            print("diemMultiPairsPlot: rejected chromosome indices:", rejected)
+
+        if not valid:
+            raise ValueError("diemMultiPairsPlot: no valid chromosome indices.")
+
+        return valid
+    
 
     # =================================================
     # Hover logic
     # =================================================
-
     def _install_format_coord(self):
+        # Formatter that always reads current matrices (no stale closures)
         n = self.n
+        ax_to_idx = {ax: k for k, ax in enumerate(self.axes)}
 
-        for ax, M in zip(self.axes, self.Ms):
-
-            def make_formatter(M):
-                def format_coord(x, y):
-                    fallback = " " * 40
-                    i = int(np.floor(x))
-                    j = int(np.floor(y))
-
-                    if 0 <= i < n and 0 <= j < n:
-                        a = self.indNames[j]
-                        b = self.indNames[i]
-                        d = M[j, i]
-                        if np.isfinite(d):
-                            return f"{a} × {b} : {d:.3f}"
-                        return f"{a} × {b} : NA"
-                    return fallback
-
-                return format_coord
-
-            ax.format_coord = make_formatter(M)
-
-    # =================================================
-    # Font size slider (under colour key)
-    # =================================================
-
-    def _init_font_slider(self):
-        bbox = self.cax.get_position()
-        ax_FS = self.fig.add_axes(
-            [bbox.x0, bbox.y0 - 0.06, bbox.width, 0.03]
-        )
-
-        self.font_slider = Slider(
-            ax_FS,
-            "Label",
-            0, 4,
-            valinit=self.fontsize,
-            valstep=1,
-        )
-        self.font_slider.on_changed(self._on_font_change)
-
-    def _on_font_change(self, val):
-        self.fontsize = int(val)
+        def make_formatter(ax):
+            def format_coord(x, y):
+                fallback = " " * 40
+                i = int(np.floor(x))
+                j = int(np.floor(y))
+                if 0 <= i < self.n and 0 <= j < self.n:
+                    k = ax_to_idx.get(ax, None)
+                    if k is None:
+                        return fallback
+                    M = self.Ms[k]
+                    a = self.indNames[j]
+                    b = self.indNames[i]
+                    d = M[j, i]
+                    if np.isfinite(d):
+                        return f"{a} × {b} : {d:.3f}"
+                    return f"{a} × {b} : NA"
+                return fallback
+            return format_coord
 
         for ax in self.axes:
-            ax.set_xticklabels(
-                self.indNames,
-                rotation=90,
-                fontsize=self.fontsize,
-            )
-            ax.set_yticklabels(
-                self.indNames,
-                fontsize=self.fontsize,
-            )
-
-        self.fig.canvas.draw_idle()
+            ax.format_coord = make_formatter(ax)
 
 
-"""________________________________________ END DiemMultiPairsPlot__________________"""
+"""________________________________________ END DiemMultiPairsPlot __________________"""
 
 
 """________________________________________ START DiemPlotPrep__________________"""
@@ -5801,9 +4286,6 @@ class DiemPlotPrep:
 
             # normalize to chromosome-relative coordinate [0, 1]
             self.MapBC.append(bed_positions / ref_len)
-
-        # optional sanity check (can remove later)
-        #print("Initialized MapBC for plotting.", self.MapBC[0][:10])
 
 
     # format_bed_data reworked by ChatGPT 5.2 for speed, but mostly clarity
@@ -5915,7 +4397,8 @@ class DiemPlotPrep:
             for scaffold, indices in scaffold_indices.items():
                 # extract once, convert once
                 s = ''.join(genome[i] for i in indices)
-                s = s.replace("_", "3")     # Future proofing? DMBCtoucher
+                s = s.replace("U", "3")     # DMBCtoucher {U,0,1,2} → {0,1,2,3}
+                s = s.replace("_", "3")     # DMBCtoucher {U,0,1,2} → {0,1,2,3}
                 scaffold_haplotypes[scaffold].append(
                     np.fromiter((ord(c) - 48 for c in s), dtype=np.int8)
                 )
@@ -5925,16 +4408,6 @@ class DiemPlotPrep:
         # --------------------------------------------------
         smoothed_scaffold_haplotypes = {}
     
-        """for scaffold, haplos in scaffold_haplotypes.items():
-            haplo_matrix = np.vstack(haplos)
-    
-            smoothed = smooth.laplace_smooth_multiple_haplotypes(  # WAS diem.smooth
-                scaffold_arrays[scaffold],
-                haplo_matrix,
-                scale
-            )
-    
-            smoothed_scaffold_haplotypes[scaffold] = smoothed"""
         for chr_i, scaffold in enumerate(self.chrom_keys):
             haplos = scaffold_haplotypes[scaffold]
             haplo_matrix = np.vstack(haplos)
@@ -5947,11 +4420,6 @@ class DiemPlotPrep:
                 )
 
             effective_scale = scale / rec_rate
-
-            """print(
-                f"Smoothing {scaffold}: scale={scale:.3g}, "
-                f"recRate={rec_rate:.3g}, effective={effective_scale:.3g}"
-            )"""
 
             smoothed = smooth.laplace_smooth_multiple_haplotypes(
                 scaffold_arrays[scaffold],
@@ -5973,7 +4441,7 @@ class DiemPlotPrep:
         for scaffold, smoothed_matrix in smoothed_scaffold_haplotypes.items():
             for i in range(n_individuals):
                 arr = smoothed_matrix[i]
-                chars = np.where(arr == 3, "_", arr.astype(str))
+                chars = np.where(arr == 3, "_", arr.astype(str)) # # DMBCtoucher {U,0,1,2} → {0,1,2,3}
                 smoothed_split_genomes[i][scaffold] = ''.join(chars.tolist())
     
         # --------------------------------------------------
@@ -6066,19 +4534,8 @@ class DiemPlotPrep:
                 chrom = chrom_keys[chr_i]
                 g0, g1, _ = self.length_of_chromosomes[chrom]   # global [start,end) slice in concatenated genome
 
-                # ---- THE SURGICAL FIX ----
                 genome_chr = genome[g0:g1]  # chromosome-local genome string
-                """print("DEBUG per-chr take:")
-                print("  chr_i:", chr_i)
-                print("  chrom:", chrom)
-                print("  g0,g1:", g0, g1)
-                print("  sum(chr_lengths):", sum(chr_lengths))
-                print("  genome_chr prefix (first 40):", genome_chr[:40])"""
-
-                # sanity (optional): check that the segment lengths sum to the chromosome slice length
-                # if sum(chr_lengths) != (g1 - g0):
-                #     print("WARN length mismatch", chr_i, chrom, sum(chr_lengths), (g1 - g0))
-
+ 
                 # now take segments from the chromosome-local string
                 string_take_result = StringTakeList(genome_chr, chr_lengths)
 
@@ -6091,17 +4548,6 @@ class DiemPlotPrep:
 
         self.diemDITgenomes = diemDITgenomes
     
-        """print("\nDEBUG A1: diem_dithering output")
-        print("  len(diemDITgenomes):", len(self.diemDITgenomes))
-
-        g0 = self.diemDITgenomes[0]
-        print("  type(diemDITgenomes[0]):", type(g0))
-
-        if isinstance(g0, list):
-            print("  len(diemDITgenomes[0]):", len(g0))
-            print("  first 3 elements:", g0[:3])
-            print("  last 3 elements:", g0[-3:])"""
-
     def generate_plot_label(self, plot_theme):
         """ Generate the label for the plot """
         self.diemPlotLabel = f"{plot_theme} @ DI = {self.di_threshold}: {len(self.DIfilteredDATA)} sites ({self.DIpercent}%) {self.nBasesDithered} bases dithered."
@@ -6472,29 +4918,6 @@ def _restrict_chromosomes(
         end = start + L
         length_of_chromosomes_remapped[chrom] = (start, end, L)
 
-    """# -------------------------------------------------
-    # DEBUG: verify coordinate system of bed_info
-    # -------------------------------------------------
-    if bed_info is not None:
-        print("\nDEBUG bed_info coordinate check:")
-        for chr_idx in kept:
-            bed_key = chr_idx + 1
-            if bed_key not in bed_info:
-                continue
-
-            chrom = chrom_keys[chr_idx]
-            g0, g1, L = length_of_chromosomes[chrom]
-
-            positions = [pos for (_, pos) in bed_info[bed_key]]
-            if not positions:
-                continue
-
-            print(
-                f"  {chrom}:",
-                f"g0={g0}, g1={g1}, L={L},",
-                f"min(pos)={min(positions)},",
-                f"max(pos)={max(positions)}"
-            )"""
 
     
     # -------------------------------------------------
@@ -6529,160 +4952,6 @@ def _restrict_chromosomes(
         length_of_chromosomes_remapped,
         new_bed,
     )
-
-def _OLDrestrict_chromosomes(
-    *,
-    input_data,
-    refposes,
-    length_of_chromosomes,
-    bed_info=None,
-    chrom_indices=None,
-):
-    """
-    Restrict genome-wide iris-plot or long-plot inputs to a subset of chromosomes,
-    remapping genomic coordinates into a concatenated space.
-
-    IMPORTANT invariants:
-      - Original chromosome keys are NEVER renamed.
-      - Chr_Nickname is NOT applied here.
-      - length_of_chromosomes is NOT overwritten.
-    """
-
-    if chrom_indices is None:
-        return (
-            input_data,
-            refposes,
-            length_of_chromosomes,
-            bed_info,
-        )
-
-    if length_of_chromosomes is None:
-        raise ValueError(
-            "chrom_indices requires length_of_chromosomes"
-        )
-
-    # -------------------------------------------------
-    # Validate chromosome indices
-    # -------------------------------------------------
-    chrom_keys = list(length_of_chromosomes.keys())
-    n_chr = len(chrom_keys)
-
-    kept = []
-    rejected = []
-    for ci in chrom_indices:
-        if isinstance(ci, (int, np.integer)) and 0 <= int(ci) < n_chr:
-            kept.append(int(ci))
-        else:
-            rejected.append(ci)
-
-    if rejected:
-        print("restrict_chromosomes: rejected chromosome indices:", rejected)
-
-    if not kept:
-        raise ValueError("restrict_chromosomes: no valid chromosome indices.")
-
-    kept = sorted(kept)
-
-    # -------------------------------------------------
-    # Build old → new chromosome spans
-    # -------------------------------------------------
-    new_spans = []
-    cum = 0.0
-
-    for old_idx in kept:
-        chrom = chrom_keys[old_idx]
-        old_start, old_end, _len = length_of_chromosomes[chrom]
-        L = old_end - old_start
-
-        new_start = cum
-        new_end = cum + L
-        cum = new_end
-
-        new_spans.append(
-            (chrom, old_start, old_end, new_start, new_end, old_idx)
-        )
-
-    # -------------------------------------------------
-    # Remap input_data (rings)
-    # -------------------------------------------------
-    new_input_data = []
-
-
-
-    for ring in input_data:
-        new_ring = []
-
-        for weights, s, e in ring:
-            # Split this segment across ALL overlapping chromosomes
-            for chrom, old_s, old_e, new_s, new_e, _old_idx in new_spans:
-                # intersection of [s,e) with [old_s,old_e)
-                ss = max(s, old_s)
-                ee = min(e, old_e)
-
-                if ee <= ss:
-                    continue  # no overlap with this chromosome
-
-                # remap into packed coordinates
-                ss2 = new_s + (ss - old_s)
-                ee2 = new_s + (ee - old_s)
-
-                new_ring.append((weights, ss2, ee2))
-
-        # Ensure ring reaches the end of the packed genome
-        if new_ring:
-            w, s_last, e_last = new_ring[-1]
-            if e_last < cum:
-                new_ring.append((w, e_last, cum))
-
-        new_input_data.append(new_ring)
-
-
-    # -------------------------------------------------
-    # Restrict refposes (order preserved)
-    # -------------------------------------------------
-    new_refposes = [refposes[i] for i in kept]
-
-    # -------------------------------------------------
-    # Remap chromosome lengths (geometry only)
-    # -------------------------------------------------
-    length_of_chromosomes_remapped = {}
-    for chrom, old_s, old_e, new_s, new_e, _old_idx in new_spans:
-        _len = length_of_chromosomes[chrom][2]
-        length_of_chromosomes_remapped[chrom] = (new_s, new_e, _len)
-
-    # -------------------------------------------------
-    # Remap bed_info (outer ticks)
-    # -------------------------------------------------
-    new_bed = None
-    if bed_info is not None:
-        new_bed = {}
-
-        for chrom, old_s, old_e, new_s, new_e, _old_idx in new_spans:
-            #if chrom not in bed_info:
-            #    continue
-            # bed_info is keyed by chromosome index (1-based or 0-based)
-            bed_key = _old_idx + 1  # if bed_info uses 1-based indexing
-
-            if bed_key not in bed_info:
-                continue
-
-
-            positions = []
-            for label, pos in bed_info[bed_key]:# was chrom not bed_key
-                if old_s <= pos <= old_e:
-                    pos2 = new_s + (pos - old_s)
-                    positions.append((label, pos2))
-
-            if positions:
-                new_bed[chrom] = positions
-
-    return (
-        new_input_data,
-        new_refposes,
-        length_of_chromosomes_remapped,
-        new_bed,
-    )
-
 
 
 """________________________________________ END Iris and Long helper function ___________________"""
@@ -6927,23 +5196,6 @@ def diemIrisPlot(
     if heatmap is not None:
         wd.add_heatmap_ring(heatmap)
 
-    """# DEBUG: verify global coordinate invariant
-    if input_data:
-        ring0 = input_data[0]
-        print("DEBUG GLOBAL CHECK (iris):")
-        print("  number of segments:", len(ring0))
-        print("  first segment:", ring0[0])
-        print("  last segment:", ring0[-1])
-        print("  last end coordinate:", ring0[-1][2])
-
-    # DEBUG: are wedge boundaries shared?
-        ends = [seg[2] for seg in ring0]
-        print("DEBUG unique end coords (first 20):", sorted(set(ends))[:20])
-
-        print("DEBUG ring identity check:")
-        print("  ring ids:", [id(r) for r in input_data[:5]])
-        print("  first segment ids:", [id(r[0]) for r in input_data[:5]])
-        print("  first segment values:", [r[0] for r in input_data[:5]])"""
 
     for ring in input_data:
         wd.add_ring(ring)
@@ -7144,10 +5396,6 @@ def diemLongPlot(
             if 1 <= k <= len(chrom_keys)
         }
 
-    """# DEBUG D2: bed_info flow
-    print("DEBUG D2 bed_info flow:")
-    print("  input bed_info:", None if bed_info is None else list(bed_info.keys()))
-    print("  remapped bed_info:", None if bed_info_remapped is None else list(bed_info_remapped.keys()))"""
 
     # -------------------------------------------------
     # Packed chromosome ranges
@@ -7168,7 +5416,6 @@ def diemLongPlot(
     n_rings = len(input_data)
     fig, ax = plt.subplots(figsize=(11, 4))
     fig.subplots_adjust(left=0.06, right=0.98, bottom=0.18, top=0.86)
-    """print("DEBUG axes position (long):", ax.get_position())"""
 
     if title is not None:
         ax.set_title(title, pad=16)
@@ -7195,12 +5442,6 @@ def diemLongPlot(
 
     for ring_idx, ring in enumerate(input_data):
         for weights, x0, x1 in ring:
-            """# DEBUG D1: inspect raw brick coordinates
-            if ring_idx == 0:
-                print("DEBUG D1 brick coords:")
-                print("  chrom_indices:", chrom_indices)
-                print("  raw x0, x1:", x0, x1)
-                print("  chrom_ranges:", chrom_ranges[:3])  # first few only"""
         
             # conditionally convert 1-based to 0-based
             if True or chrom_indices is None:
@@ -7243,33 +5484,6 @@ def diemLongPlot(
             rotation=90
         )
 
-    """# -------------------------------------------------
-    # DEBUG: verify bed_info ↔ chrom_ranges consistency
-    # -------------------------------------------------
-    if bed_info_remapped is not None:
-        print("DEBUG bed_info vs chrom_ranges (long):")
-        print("  bed_info_remapped keys:", list(bed_info_remapped.keys()))
-        print("  chrom_ranges keys:", [chrom for chrom, _, _ in chrom_ranges])
-
-        for key, positions in bed_info_remapped.items():
-            xs = [pos for (_, pos) in positions]
-            if not xs:
-                print(f"  {key}: NO POSITIONS")
-                continue
-
-            xmin, xmax = min(xs), max(xs)
-
-            hits = [
-                chrom
-                for chrom, p0, p1 in chrom_ranges
-                if not (xmax < p0 or xmin > p1)
-            ]
-
-            print(
-                f"  {key}: "
-                f"min(pos)={xmin:.2f}, max(pos)={xmax:.2f}, "
-                f"overlaps chrom_ranges={hits}"
-            )"""
 
     # -------------------------------------------------
     # Outer ticks (linear analogue of iris outer ticks)
@@ -7280,22 +5494,6 @@ def diemLongPlot(
         text_y  = n_rings + 2 + 0.22
 
         # NOTE: positions are already packed coords
-        """print("DEBUG tick y positions:",
-            tick_y0, tick_y1, text_y,
-            "ylim:", ax.get_ylim())
-        
-        print("DEBUG outer tick coordinate system check (long):")
-        print("  packed_len:", packed_len)
-        for chrom, positions in bed_info_remapped.items():
-            xs = [pos for (_, pos) in positions]
-            print(
-                f"  {chrom}: "
-                f"min(pos)={min(xs):.2f}, "
-                f"max(pos)={max(xs):.2f}"
-            )
-        print("DEBUG chrom_ranges:")
-        for chrom, p0, p1 in chrom_ranges:
-            print(f"  {chrom}: p0={p0}, p1={p1}")"""
 
         for chrom, p0, p1 in chrom_ranges:
             if chrom not in bed_info_remapped:
