@@ -20,7 +20,7 @@ from matplotlib.colors import to_rgb, LinearSegmentedColormap
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Tuple, List, Optional
+from typing import Iterable, Callable, Dict, Tuple, List, Optional
 
 # ---- diem internals ----
 from . import smooth
@@ -31,7 +31,8 @@ from .smooth import laplace_smooth_multiple_haplotypes
 
 # more explicit imports
 from fractions import Fraction
-from bisect import bisect_left
+#from bisect import bisect_left
+import bisect
 from joblib import Parallel, delayed # for parallel computation of 'pwdmatrix' pairwise distance matrix rows
 
 """********************************************************
@@ -359,7 +360,7 @@ def read_diem_bed_4_plots(bed_file_path, meta_file_path):
         # Use chromosome count (24 in your case)
         chrRelativeRecRates = np.ones(len(chrNames), dtype=float)
     chrLengths = np.array(df_meta['RefEnd0'].values) - np.array(df_meta['RefStart0'].values)
-    sampleNames = np.array(df_meta.columns[6:])
+    sampleNames = np.array(df_meta.columns[7:]) # Skip everything in title line up to relativeRecRates
     
     ploidyByChr = []
     for chr in chrNames:
@@ -701,7 +702,7 @@ def fractional_positions_of_multiples(A, delta):
 
     for k in range(1, max_k + 1):
         x = k * delta
-        i = bisect_left(A, x)
+        i = bisect.bisect_left(A, x)
 
         # skip values below the first element
         if i == 0:
@@ -2750,10 +2751,6 @@ class GenomicContributionsPlot:
 
 """________________________________________ START IndGenomicContributions ___________________"""
 
-import numpy as np
-import bisect
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button
 
 class IndGenomicContributionsPlot:
     """
@@ -2893,6 +2890,7 @@ class IndGenomicContributionsPlot:
 
             self._cache_tol = float(cache_tol)
 
+        self.fig.canvas.draw()   # force first render NOW (fix for issue 1)
         plt.show()
 
     # --------------------------------------------------
@@ -2904,6 +2902,9 @@ class IndGenomicContributionsPlot:
         Return (chrom_counts, chrom_retained) using cache if available.
         """
         payload = None
+
+        used_cache = False   # <-- ALWAYS define this
+
         if self._cache_tol > 0:
             payload = self._cache_get_nearest(DIval, self._cache_tol)
 
@@ -2925,12 +2926,16 @@ class IndGenomicContributionsPlot:
         """
         chrom_counts, chrom_retained = self._get_statewise_payload(DIval)
 
+
+
         nChr = len(chrom_counts)
         nInd = chrom_counts[0]["counts0"].shape[0]
+
 
         # totals of sites retained/total (SNVs, not alleles) for title
         self.DInumer = sum(n for (n, _) in chrom_retained)
         self.DIdenom = sum(d for (_, d) in chrom_retained)
+
         self.current_DI = float(DIval)
 
         # Sum ploidy-weighted counts over chromosomes for each individual
@@ -2944,6 +2949,7 @@ class IndGenomicContributionsPlot:
 
         for chr_i in range(nChr):
             c = chrom_counts[chr_i]
+
             sum0 += c["counts0"]
             sum1 += c["counts1"]
             sum2 += c["counts2"]
@@ -2973,8 +2979,7 @@ class IndGenomicContributionsPlot:
 
         # Compute global HI for reorder-by-HI (authoritative from statewise counts)
         global_summaries = summaries_from_statewise_counts(chrom_counts)
-        self.global_HI = global_summaries[0]  # (nInd,)
-
+        self.global_HI = global_summaries[0]  # HI is first summary
 
 
     # --------------------------------------------------
@@ -2982,7 +2987,7 @@ class IndGenomicContributionsPlot:
     # --------------------------------------------------
 
     def _draw_bars(self):
-
+ 
         self.ax.clear()
 
         nInd = len(self.dPol.indNames)
@@ -2990,6 +2995,7 @@ class IndGenomicContributionsPlot:
 
         x = np.arange(nInd)
         bottoms = np.zeros(nInd, dtype=float)
+
 
         colours = [
             diemColours[1],   # HOM1
@@ -3001,16 +3007,17 @@ class IndGenomicContributionsPlot:
         labels = ["HOM1", "HET", "HOM2", "U", "<DI"]
 
         for k in range(5):
+            y = np.asarray(self.props[order, k], dtype=float)
             self.ax.bar(
                 x,
-                self.props[order, k],
-                bottom=bottoms,
+                y,
+                bottom=bottoms.copy(),   # freeze for this layer
                 color=colours[k],
                 edgecolor="black" if k == 4 else None,
                 linewidth=0.4 if k == 4 else 0,
                 label=labels[k],
             )
-            bottoms += self.props[order, k]
+            bottoms = bottoms + y        # NOT in-place
 
         self.ax.set_xlim(-0.5, nInd - 0.5)
         self.ax.set_ylim(0, 1)
@@ -3044,7 +3051,6 @@ class IndGenomicContributionsPlot:
         )
 
         self.fig.canvas.draw_idle()
-
     # --------------------------------------------------
     # Widgets
     # --------------------------------------------------
@@ -3102,25 +3108,24 @@ class IndGenomicContributionsPlot:
         self.indNameFont = int(val)
         self._draw_bars()
 
+
     def reorder(self, event=None):
         """
         Reorder individuals by HI given the CURRENT DI threshold.
-        """
-
+        """        
         if self.global_HI is None:
             print("  global_HI is None -> returning")
             return
 
-         # global_HI already corresponds to current DI because DIupdate recomputes it
-        if self.global_HI is None:
-            return
         self.indHIorder = np.argsort(self.global_HI)
 
         print("  order AFTER reorder head:", self.indHIorder[:12])
-        print("  HI head (new order):", np.round(HI[self.indHIorder][:10], 4))
+        print("  HI head (new order):", np.round(self.global_HI[self.indHIorder][:10], 4))
 
         self._draw_bars()
 
+
+        
 """________________________________________ END IndGenomicContributions ___________________"""
 
 
@@ -3517,24 +3522,33 @@ class diemPairsPlot:
     # =================================================
     # Computation
     # =================================================
-
-    def _get_HI_for_DI(self, DIthreshold):
-        # Fast path: statewise incremental cache -> HI from chrom_counts snapshot
+    
+    def _get_HI_and_retained_for_DI(self, DIthreshold):
+        """
+        Return (HI, DInumer, DIdenom) at DIthreshold.
+        DInumer/DIdenom are SNV counts retained/total across all chromosomes.
+        """
         if self._inc_statewise is not None:
             di_key = self._nearest_grid_value(DIthreshold)
-            chrom_counts, _chrom_retained = self._inc_statewise._snapshots[di_key]
-            summaries = summaries_from_statewise_counts(chrom_counts)
-            return summaries[0]
+            chrom_counts, chrom_retained = self._inc_statewise._snapshots[di_key]
+            HI = summaries_from_statewise_counts(chrom_counts)[0]
+            DInumer = sum(n for (n, _) in chrom_retained)
+            DIdenom = sum(d for (_, d) in chrom_retained)
+            return HI, DInumer, DIdenom
 
-        # Fallback: existing global summary
-        summaries, _, _ = genomes_summary_given_DI(self.dPol, DIthreshold)
-        return summaries[0]
+        # fallback (no statewise cache)
+        # Use the same statewise function IndGenomicContributionsPlot uses
+        chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, float(DIthreshold))
+        HI = summaries_from_statewise_counts(chrom_counts)[0]
+        DInumer = sum(n for (n, _) in chrom_retained)
+        DIdenom = sum(d for (_, d) in chrom_retained)
+        return HI, DInumer, DIdenom
 
     def _get_M_for_DI(self, DIthreshold):
         if self._inc_pairwise is not None:
             return self._inc_pairwise.get(DIthreshold)
 
-        # Fallback: your existing parallel matrix builder
+        # Fallback: the existing parallel matrix builder
         return PARApwmatrixFromDiemType(
             self.dPol,
             DIthreshold=float(DIthreshold),
@@ -3552,8 +3566,10 @@ class diemPairsPlot:
         M_raw = self._get_M_for_DI(self.current_DI)
 
         # ordering
+        HI, DInumer, DIdenom = self._get_HI_and_retained_for_DI(self.current_DI)
+        self.DInumer = int(DInumer)
+        self.DIdenom = int(DIdenom)
         if force_reorder or not hasattr(self, "ind_order") or self.ind_order is None:
-            HI = self._get_HI_for_DI(self.current_DI)
             self.ind_order = np.argsort(HI)
 
         # apply ordering
@@ -3583,7 +3599,12 @@ class diemPairsPlot:
         self.ax.set_xticklabels(self.indNames, rotation=90, fontsize=self.label_fontsize)
         self.ax.set_yticklabels(self.indNames, fontsize=self.label_fontsize)
 
-        self.ax.set_title(f"Pairwise distances (DI ≥ {self.current_DI:.2f})", pad=10)
+        prop_sites = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
+        self.ax.set_title(
+            "Pairwise distances  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(self.current_DI, self.DInumer, 100 * prop_sites),
+            pad=10,
+        )
 
     def _color_for_val(self, val, norm):
         if not np.isfinite(val):
@@ -3636,7 +3657,13 @@ class diemPairsPlot:
                 k += 1
 
         # update title
-        self.ax.set_title(f"Pairwise distances (DI ≥ {self.current_DI:.2f})", pad=10)
+        #self.ax.set_title(f"Pairwise distances (DI ≥ {self.current_DI:.2f})", pad=10)
+        prop_sites = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
+        self.ax.set_title(
+            "Pairwise distances  DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(self.current_DI, self.DInumer, 100 * prop_sites),
+            pad=10,
+        )
 
         self.fig.canvas.draw_idle()
 
@@ -3940,19 +3967,25 @@ class diemMultiPairsPlot:
     # =================================================
     # Computation
     # =================================================
-    def _get_HI_for_DI(self, DIthreshold):
+    
+    def _get_HI_and_retained_for_DI(self, DIthreshold):
         if self._inc_statewise is not None:
             di_key = self._nearest_grid_value(DIthreshold)
-            chrom_counts, _ = self._inc_statewise._snapshots[di_key]
-            summaries = summaries_from_statewise_counts(chrom_counts)
-            return summaries[0]
+            chrom_counts, chrom_retained = self._inc_statewise._snapshots[di_key]
+            HI = summaries_from_statewise_counts(chrom_counts)[0]
+        else:
+            chrom_counts, chrom_retained = statewise_genomes_summary_given_DI(self.dPol, float(DIthreshold))
+            HI = summaries_from_statewise_counts(chrom_counts)[0]
 
-        summaries, _, _ = genomes_summary_given_DI(self.dPol, DIthreshold)
-        return summaries[0]
+        DInumer = sum(n for (n, _) in chrom_retained)
+        DIdenom = sum(d for (_, d) in chrom_retained)
+        return HI, int(DInumer), int(DIdenom)
 
     def _compute_order_for_DI(self, DIthreshold):
-        HI = self._get_HI_for_DI(DIthreshold)
+        HI, DInumer, DIdenom = self._get_HI_and_retained_for_DI(DIthreshold)
         self.ind_order = np.argsort(HI)
+        self.DInumer = DInumer
+        self.DIdenom = DIdenom
 
     def _get_M_chr_for_DI(self, chr_idx, DIthreshold):
         chr_idx = int(chr_idx)
@@ -4014,7 +4047,12 @@ class diemMultiPairsPlot:
 
             ax.set_title(self.ChrNickNames[int(chr_idx)], fontsize=10, pad=8)
 
-        self.fig.suptitle(f"Pairwise distances (DI ≥ {self.current_DI:.3f})", y=0.98)
+        prop_sites = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
+        self.fig.suptitle(
+            "Pairwise distances DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(self.current_DI, self.DInumer, 100 * prop_sites),
+            y=0.98
+        )
 
     def _color_for_val(self, val, norm):
         if not np.isfinite(val):
@@ -4057,7 +4095,12 @@ class diemMultiPairsPlot:
                     bricks[k].set_facecolor(self._color_for_val(val, norm))
                     k += 1
 
-        self.fig.suptitle(f"Pairwise distances (DI ≥ {self.current_DI:.3f})", y=0.98)
+        prop_sites = self.DInumer / self.DIdenom if self.DIdenom > 0 else 0.0
+        self.fig.suptitle(
+            "Pairwise distances DI ≥ {:.2f}  {} SNVs  ({:.1f}% divergent across barrier)"
+            .format(self.current_DI, self.DInumer, 100 * prop_sites),
+            y=0.98
+        )
         self.fig.canvas.draw_idle()
 
     # =================================================
@@ -4119,6 +4162,8 @@ class diemMultiPairsPlot:
             di_eff = self._nearest_grid_value(val)
         else:
             di_eff = float(val)
+        # update retained/total counts for title (no reorder)
+        _, self.DInumer, self.DIdenom = self._get_HI_and_retained_for_DI(di_eff)
 
         # keep current ordering during slider motion
         self._compute_matrices_for_DI(di_eff, keep_order=True)
@@ -4355,8 +4400,6 @@ class DiemPlotPrep:
 
 
     def kernel_smooth(self, scale): # ChatGPT drop-in
- #       from collections import defaultdict
- #       import numpy as np
     
         # --------------------------------------------------
         # 1. Precompute scaffold → indices
@@ -4648,9 +4691,6 @@ def flatten_ring_with_offsets(per_chr_ring, length_of_chromosomes):
             ))
 
     return flat
-
-import time
-from typing import Iterable, Callable, Optional
 
 def prefill_slider_cache(
     *,
@@ -4986,7 +5026,7 @@ def diemIrisFromPlotPrep(prepped, chrom_indices=None):
         title=prepped.diemPlotLabel,
         input_data=input_data,
         refposes=prepped.DIfilteredBED_formatted,
-        names=prepped.ind_ids,
+        names=prepped.IndIDs_ordered,
         bed_info=prepped.iris_plot_prep,
         length_of_chromosomes=prepped.length_of_chromosomes,
         chrom_indices=chrom_indices,
@@ -5116,7 +5156,7 @@ def diemLongFromPlotPrep(prepped, chrom_indices=None):
         title=prepped.diemPlotLabel,
         input_data=input_data,
         refposes=prepped.DIfilteredBED_formatted,
-        names=prepped.ind_ids,
+        names=prepped.IndIDs_ordered,
         bed_info=prepped.iris_plot_prep,
         length_of_chromosomes=prepped.length_of_chromosomes,
         chrom_indices=chrom_indices,
