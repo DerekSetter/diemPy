@@ -702,7 +702,7 @@ def fractional_positions_of_multiples(A, delta):
 
     for k in range(1, max_k + 1):
         x = k * delta
-        i = bisect_left(A, x)
+        i = bisect.bisect_left(A, x)
 
         # skip values below the first element
         if i == 0:
