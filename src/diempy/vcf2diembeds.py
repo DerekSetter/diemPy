@@ -176,7 +176,7 @@ def fastGTs(sample_fields, seqLabelsString, gt_index):
                 GTlabelcount[1] += 2; return '2'
             case _:
                 a, _, b = s.partition('/')
-                if a == '.' or not b:
+                if a == '.' or b == '.' or not b:
                     return diemUencodableChar
                 i = int(a); j = int(b)
                 if max(i, j) >= diemMaxVariants:
