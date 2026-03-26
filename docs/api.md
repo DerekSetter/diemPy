@@ -3,31 +3,31 @@
 This is the API
 
 ```{eval-rst}
-.. currentmodule:: diem
+.. currentmodule:: diempy
 ```
 
 ## diemtype
 
 ```{eval-rst}
-.. automodule:: diem.diemtype
+.. automodule:: diempy.diemtype
     :members: save_DiemType, load_DiemType, flip_polarity
     :exclude-members: DiemType
 
-.. autoclass:: diem.diemtype.DiemType
+.. autoclass:: diempy.diemtype.DiemType
    :members: sort,copy,polarize,apply_threshold,smooth,create_contig_matrix,get_intervals_of_state,intervals_to_bed
 ```
 
 
 ## contigs and intervals
 ```{eval-rst}
-.. automodule:: diem.contigs
+.. automodule:: diempy.contigs
     :members: Interval, Contig, export_contigs_to_ind_bed_files
 ```
 
 <!--
 ## polarization submodule
 ```{eval-rst}
-.. automodule:: diem.polarize
+.. automodule:: diempy.polarize
     :members:
 ```
 -->
@@ -35,7 +35,7 @@ This is the API
 <!--
 ## smoothing submodule
 ```{eval-rst}
-.. automodule:: diem.smooth
+.. automodule:: diempy.smooth
     :members:
 ```
 -->
@@ -43,14 +43,14 @@ This is the API
 <!--
 ## tests submodule
 ```{eval-rst}
-.. automodule:: diem.tests
+.. automodule:: diempy.tests
     :members:
 ```
 -->
 
 ## plots submodule
 ```{eval-rst}
-.. automodule:: diem.plots
+.. automodule:: diempy.plots
     :members: GenomeSummaryPlot, GenomeMultiSummaryPlot,GenomicDeFinettiPlot, GenomicMultiDeFinettiPlot, GenomicContributionsPlot, diemPairsPlot, diemMultiPairsPlot, diemPlotPrepFromBedMeta, diemIrisFromPlotPrep, diemLongFromPlotPrep
 ```
 
